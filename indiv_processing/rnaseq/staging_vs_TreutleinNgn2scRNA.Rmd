@@ -1,0 +1,208 @@
+---
+title: "Staging against Ngn2 scRNA timecourse"
+author: "Pierre-Luc"
+date: "12/25/2021"
+output:
+    html_document:
+        toc: true
+        toc_float: true
+        theme: 'cerulean'
+        highlight: 'tango'
+        code_folding: hide
+---
+
+```{r}
+suppressPackageStartupMessages({
+  library(SingleCellExperiment)
+  library(scuttle)
+  library(edgeR)
+  library(BiocSingular)
+  library(ggplot2)
+  library(cowplot)
+})
+source("../../misc.R")
+source("../../colors.R")
+```
+
+We use the scRNAseq Ngn2 timecourse from Treutlein (Lin et al., Stem Cell Reports 2021) to estimate whether the 7q align differently on it.
+
+```{r, eval=FALSE}
+# data from ArrayExpress, assembled as SCE
+sce <- readRDS("SCE.rds")
+
+# There shouldn't be astrocytes <= day2
+# Astro, checked for c("Aqp4", "Gfap", "Fgfr3","Dio2")
+# Cluster 8 clearly astrocytic
+# Cluster 5 could be marker-wise, time-wise doesn't work
+sce <- sce[,!(sce$seurat_clusters %in% c(5,8))]
+# Cluster 2 are iPSC, they somehow show up again in later weeks, presumably because the few that made it replicated -> remove from d>0
+sce <- sce[,sce$seurat_clusters != 2L | sce$timepoint=="h0"]
+# We remove clusters with pluripotency genes from the later timepoints
+sce <- sce[,!(sce$seurat_clusters %in% c(15L,9L,6L,0L,17L) & sce$timepoint %in% c("w2","w4","w5"))]
+pb <- sumCountsAcrossCells(sce, sce$timepoint)
+assayNames(pb) <- "counts"
+assays(pb)$logcpm <- log1p(cpm(calcNormFactors(DGEList(assay(pb)))))
+pb <- pb[,c(4:5,1:3,6:8)]
+saveRDS(pb, file="../../extData/TreutleinNgn2scRNA.PB.rds")
+```
+
+```{r}
+pb <- readRDS("../../extData/TreutleinNgn2scRNA.PB.rds")
+```
+
+
+```{r, eval=FALSE}
+# sanity check, not shown
+pca <- as.data.frame(runPCA(t(assays(pb)$logcpm), 2, BSPARAM=IrlbaParam())$x)
+pca$stage <- row.names(pca)
+ggplot(pca, aes(PC1, PC2, label=stage)) + geom_text()
+```
+
+# Comparison based on the whole transcriptome
+
+```{r, fig.width=8, fig.height=8}
+iso <- toSymbol(readRDS("../../clean/Neurons/RNA/Neurons.RNA.isogenic.SE.rds"))
+pd <- toSymbol(readRDS("../../clean/Neurons/RNA/Neurons.RNA.patientDerived.SE.rds"))
+
+siso <- stage(assays(iso)$logcpm, assays(pb)$logcpm)
+spd <- stage(assays(pd)$logcpm, assays(pb)$logcpm)
+
+#Heatmap(siso[-1:-2,], cluster_columns=FALSE, cluster_rows=FALSE, col=viridisLite::viridis(100,direction = -1))
+
+
+d <- rbind(cbind(reshape2::melt(spd), system="patient-derived"), 
+           cbind(reshape2::melt(siso), system="isogenic"))
+d$genotype <- sapply(strsplit(as.character(d$Var2),".",fixed=TRUE), FUN=function(x) x[2])
+d <- d[d$genotype != "AtWBS",]
+d$genotype <- factor(d$genotype, c("WBS","CTRL","DUP"))
+
+p <- ggplot(d, aes(Var1, value, fill=genotype)) + geom_boxplot(outlier.color=NA) + 
+  scale_fill_manual(values=c(WBS="red", CTRL="grey", DUP="blue")) +
+  labs(x="Ngn2 differentiation timepoint", y="Corrected correlation")
+plot_grid(p + ggtitle("Merged"),
+          p + facet_wrap(~system) + ggtitle("Split"), nrow=2, labels="AUTO")
+```
+
+Overall, the highest correlations are with week 2 iNeurons.
+WBS correlates better than CTRL with earlier timepoints, and worse with later timepoints, corroborating a delay in differentiation. 7Dup correlates less with early timepoints, but not really more with later timepoints. The pattern here is different between isogenic & patient-derived, but the effect here is chiefly due to genes changing in early differentiation (see below).
+
+# Comparison based on top genes changing with late differentation
+
+Since there's no question that cells from each condition are indeed neurons, differences in differentiation stage should be especially visible in genes changing during maturation. We therefore reproduce the analysis using the top genes changing monotonously in the last 4 timepoints.
+
+```{r}
+pb2 <- pb[,5:8]
+pb2 <- pb2[rowSums(assay(pb2)>30)>=1,]
+e <- assays(pb2)$logcpm
+e2 <- e[,2:4]-e[,1:3]
+e2 <- e2[sign(e2[,1])==sign(e2[,2]) & sign(e2[,2])==sign(e2[,3]),]
+e2 <- e2[order(rowMedians(abs(e2))+rowMins(abs(e2)), decreasing=TRUE),]
+mg <- head(row.names(e2),300)
+```
+
+```{r, fig.width=8, fig.height=8}
+siso <- stage(assays(iso)$logcpm, assays(pb2)$logcpm[mg,])
+spd <- stage(assays(pd)$logcpm, assays(pb2)$logcpm[mg,])
+
+d2 <- rbind(cbind(reshape2::melt(spd), system="patient-derived"), 
+           cbind(reshape2::melt(siso), system="isogenic"))
+d2$genotype <- sapply(strsplit(as.character(d2$Var2),".",fixed=TRUE), FUN=function(x) x[2])
+d2 <- d2[d2$genotype != "AtWBS",]
+d2$genotype <- factor(d2$genotype, c("WBS","CTRL","DUP"))
+
+p2 <- ggplot(d2, aes(Var1, value, fill=genotype)) + geom_boxplot(outlier.color=NA) + 
+  scale_fill_manual(values=c(WBS="red", CTRL="grey", DUP="blue")) +
+  labs(x="Ngn2 differentiation timepoint", y="Corrected correlation")
+plot_grid(p2 + ggtitle("Merged"),
+          p2 + facet_wrap(~system) + ggtitle("Split"), nrow=2, labels="AUTO")
+
+```
+
+The pattern for WBS is the same as previously, but 7Dup isogenic does not anymore show an acceleration in maturation-associated genes.
+
+Based on this, we can claim a differentiation delay in WBS.
+
+Both merged figures:
+
+```{r, fig.width=8, fig.height=8}
+plot_grid(p + ggtitle("Whole transcritpme"),
+          p2 + ggtitle("Top 300 genes changing monotonously from d5 to w5"), nrow=2, labels="AUTO")
+```
+
+
+# Overall pattern of key components throughout differentation
+
+```{r, cache=TRUE}
+sets <- plgINS2::getMsigSets(collections=c("H","C5"))
+sets <- sets[grep("MTOR|ION_CHANNEL|SYNAPTIC", names(sets))]
+```
+
+Trying to adapt Marija's summary scheme to Ngn2 differentiation, based on real data (same as above):
+
+
+```{r}
+topG <- readLines("../../extData/TOP.genes")
+e <- assays(pb)$logcpm
+trs <- unique(union(intersect(row.names(e),unlist(sets[grep("MTOR", names(sets))])), grep("^RPL|^RPS|^MRPL|^MRPS", row.names(e), value=TRUE)))
+b <- rbind("Translation/mTOR"=colSums(e[trs,])^2,
+        REST=e["REST",],
+#        mTOR=colSums(e[intersect(row.names(e), ),]),
+ #       "5' TOP"=colSums(e[intersect(row.names(e), topG),]),
+        "Synaptic transmission"=colSums(e[intersect(row.names(e),unlist(sets[grep("SYNAPTIC_TRANSMISSION", names(sets))])),]),
+        "Ion channels"=colSums(e[intersect(row.names(e),unlist(sets[grep("ION_CHANNEL", names(sets))])),])
+        )
+b <- b-(rowMin(b)/2)
+b <- b/rowMax(b)
+d3 <- reshape2::melt(b, varnames=c("Component", "Timepoint"), value.name="level")
+ggplot(d3, aes(Timepoint, level, group=Component, colour=Component)) + geom_smooth(span=0.7, se=FALSE, size=2) + ylab("Relative level (RNA)")
+```
+
+Note that 5'-TOP genes and genes associated to mTOR signaling show exactly the same trend as the "translation" genes, so they were grouped in one category.
+
+## Components in 7q11 {.tabset}
+
+```{r}
+e <- cbind(assays(iso)$logcpm, assays(pd)$logcpm)
+b <- rbind(Translation=colSums(e[grep("^RPL|^RPS|^MRPL|^MRPS", row.names(e)),])^2,
+        REST=e["REST",],
+      #  "5' TOP"=colSums(e[intersect(row.names(e), topG),]),
+        "Synaptic transmission"=colSums(e[intersect(row.names(e),unlist(sets[grep("SYNAPTIC_TRANSMISSION", names(sets))])),]),
+        "Ion channels"=colSums(e[intersect(row.names(e),unlist(sets[grep("ION_CHANNEL", names(sets))])),])
+        )
+b <- b/rowMax(b)
+d4 <- reshape2::melt(b, varnames=c("Component", "Sample"), value.name="level")
+d4$genotype <- sapply(strsplit(as.character(d4$Sample),".",fixed=TRUE), FUN=function(x) x[2])
+d4 <- d4[d4$genotype != "AtWBS",]
+d4$genotype <- factor(d4$genotype, c("WBS","CTRL","DUP"))
+```
+
+### Merged
+
+```{r}
+ggplot(d4, aes(genotype, level, fill=genotype)) + geom_boxplot(outlier.colour = NA) + facet_wrap(~Component, scales="free_y")
+```
+
+### Isogenics
+
+```{r}
+ggplot(d4[grep("_",d4$Sample,invert=TRUE),], aes(genotype, level, fill=genotype)) + geom_boxplot(outlier.colour = NA) + facet_wrap(~Component, scales="free_y")
+```
+
+### Patient-derived
+
+```{r}
+ggplot(d4[grep("_",d4$Sample),], aes(genotype, level, fill=genotype)) + geom_boxplot(outlier.colour = NA) + facet_wrap(~Component, scales="free_y")
+```
+
+## Rough localization on the timecourse
+
+We smooth a bit the curves (except REST), and give the genotypes positions on the x axis that roughly match their relative position in the components:
+
+```{r}
+ggplot(d3[d3$Component!="REST",], aes(Timepoint, level, group=Component, colour=Component)) + geom_smooth(span=1, se=FALSE, size=2) + 
+  geom_smooth(data=d3[d3$Component=="REST",], span=0.7, se=FALSE, size=2) +
+  ylab("Relative level (RNA)") + xlab("Ngn2 differentiation") +
+  geom_vline(xintercept=c(6.1,6.6,6.8), linetype="dashed", colour=c("red", "darkgrey", "blue")) +
+  annotate("label", x=c(6.1-0.2,6.6,6.8+0.2), y=c(.55,.45,.55), label=c("WBS", "CTRL", "7Dup"), col=c("red", "darkgrey", "blue")) +
+  scale_x_discrete(breaks=c("h0","w5"), labels=c("iPSC","mature neurons"))
+```

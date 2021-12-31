@@ -1,0 +1,196 @@
+---
+title: "REST"
+output:
+    html_document:
+        toc: true
+        toc_float: true
+        theme: 'cerulean'
+        highlight: 'tango'
+        code_folding: hide
+        df_print: paged
+---
+
+<style>
+  .main-container {
+    max-width: 1500px !important;
+  }
+</style>
+
+=====================
+Pierre-Luc Germain - `r format(Sys.time(), '%d %B, %Y')`
+<br><br><br>
+
+
+```{r}
+suppressPackageStartupMessages({
+  library(SummarizedExperiment)
+  library(SEtools)
+  library(ggplot2)
+  library(cowplot)
+  library(ggrepel)
+  library(grid)
+  library(viper)
+  library(limma)
+  library(ComplexHeatmap)
+})
+source("../misc.R")
+source("../colors.R")
+source("../misc/GO.R")
+source("../misc/enrichmentAnalysis.R")
+load("../extData/complexes.RData")
+theme_set(theme_cowplot())
+```
+
+# TFA analysis on 7q Neurons
+
+```{r}
+deas <- list( RNA=readRDS("../clean/Neurons/RNA/Neurons.RNA.merged.DEA.rds"),
+              Protein=readRDS("../clean/Neurons/Protein/Neurons.Protein.merged.DEA.rds") )
+SEs  <- list( RNA=readRDS("../clean/Neurons/RNA/Neurons.RNA.merged.SE.rds"),
+              Protein=readRDS("../clean/Neurons/Protein/Neurons.Protein.merged.SE.rds") )
+SEs <- lapply(SEs, FUN=function(se){
+  se <- se[,se$genotype!="AtWBS"]
+  se$genotype <- droplevels(se$genotype)
+  se
+})
+
+se.prot <- SEs$Protein
+deas <- lapply(deas, toSymbol)
+rna.degs <- getDEGs.any(deas$RNA, logFC.thres=0.2, FDR.thres=0.01)
+prepAssay <- function(x){
+  if(all(grepl(".",head(row.names(x)),fixed=T))) x <- toSymbol(x);
+  if(!("log2FC" %in% assayNames(x))){
+    e <- SEtools:::.chooseAssay(x)
+    assays(x)$log2FC <- e - rowMeans(e[,which(x$genotype=="CTRL")])
+  }
+  x
+}
+
+SEs <- lapply(SEs, FUN=prepAssay)
+```
+
+## TF analysis
+
+```{r}
+load("../extData/regulon_weighted.RData")
+vi <- viper(assays(SEs$RNA)$corrected, regulon = regulon, pleiotropy = TRUE, verbose = FALSE)
+vi <- SummarizedExperiment(list(vi=vi), colData=colData(SEs$RNA))
+mm <- model.matrix(~Dataset+genotype, data=as.data.frame(colData(SEs$RNA)))
+fit <- eBayes(lmFit(assay(vi), mm))
+vi.res <- topTable(fit, 3:4,number = Inf)
+vi.res$expression.logFC <- deas$RNA[row.names(vi.res),"logFC"]
+vi.res$expression.FDR <- deas$RNA[row.names(vi.res),"FDR"]
+stat <- deas$RNA$stat
+names(stat) <- row.names(deas$RNA)
+msvi <- msviper(stat, regulon = regulon, verbose=FALSE)
+msvi2 <- as.data.frame(msvi$es[c(1,3:5)])
+msvi2 <- msvi2[order(msvi2$p.value),]
+m <- merge(vi.res, msvi2, by="row.names")
+m$consistent <- factor(sign(m$expression.logFC)==sign(m$nes) & m$expression.FDR<0.1 & m$adj.P.Val<0.1 & m$p.value<0.1)
+levels(m$consistent) <- c("plain","bold")
+m$expression.FDR[is.na(m$expression.FDR)] <- 1
+w <- which(abs(m$expression.logFC)>=1)
+m$expression.logFC[w] <- sign(m$expression.logFC[w])
+
+p1 <- ggplot(m, aes(nes, -log10(adj.P.Val), size=-log10(expression.FDR),
+              colour=expression.logFC, label=Row.names, fontface=consistent,
+              alpha=consistent)) +
+  geom_vline(xintercept = 0, linetype="dashed", colour="gray") + geom_text() +
+  scale_color_gradient2(low = "blue", mid = "darkgrey", high="red") + 
+  labs( y="Differential activity -log10(FDR)",
+        x="Relative activity (viper nES)",
+        size="expression\nFDR", colour="expression\nlogFC") +
+  scale_alpha_manual(values=c(plain=0.5, bold=1), guide=FALSE) +
+  scale_size_continuous(breaks=c(0,2,4,6), 
+                        labels=c("1","0.01",expression(10^-4),expression(10^-6))) +
+  geom_label(data=m[m$consistent=="bold",]) + xlim(-4.5,4.5) + 
+  ggtitle("Master regulator analysis")
+
+rest <- intersect(names(regulon$REST[[1]]), rna.degs)
+rest2 <- intersect(names(regulon$REST[[1]])[regulon$REST$likelihood>0.5], rna.degs)
+```
+
+## REST inhibitor
+
+```{r, fig.height=8.5, fig.width=12}
+dea <- readRDS("../clean/Neurons/RNA/Neurons.RNA.rest.DEA.rds")
+SEs$RNA$system <- SEs$RNA$Dataset
+SEs$RNA <- SEs$RNA[, order(factor(SEs$RNA$genotype, c("WBS","CTRL","DUP")), SEs$RNA$Dataset)]
+se <- readRDS("../clean/Neurons/RNA/Neurons.RNA.rest.SE.rds")
+se$system <- "REST"
+sem <- SEtools::mergeSEs(list("7q"=SEs$RNA, "rest"=se), use.assays="log2FC")
+sem$system <- factor(sem$system, c("patientDerived","isogenic","REST"))
+metadata(sem)$anno_colors <- list(treatment=c("DMSO"="lightgrey", "RestInhibitor"="darkgreen"))
+metadata(sem)$anno_colors$system <- c("REST"="darkolivegreen4")
+m <- merge(subset_mDEA(deas$RNA, "WBS"), dea, suffix=c(".WBS",".REST"), by="row.names")
+mdegs <- union(getDEGs(deas$RNA), getDEGs(subset_mDEA(deas$RNA,"WBS")))
+m$isDEG <- m$Row.names %in% mdegs
+m$agg.fdr <- apply(m[,grep("FDR",colnames(m))], 1, FUN=aggregation::fisher)
+m$sign.consistent <- sign(m$logFC.REST) == -sign(m$logFC.WBS) & abs(m$logFC.REST)>log2(1.1) & abs(m$logFC.WBS)>log2(1.1)
+m$agg.fdr[!m$sign.consistent] <- 1
+consistent <- m$Row.names[m$agg.fdr<0.05 & (m$FDR.REST<0.05 | m$FDR.WBS<0.05)]
+cons.go <- goseq.enrichment(consistent, "GO:BP", allGenes=m$Row.names)
+set.seed(1234)
+p2 <- clusterGO(cons.go)
+
+g <- setdiff(unique(getWordsFromString(cons.go$genes[grep("potassium",cons.go$term)])),"KCNAB1")
+# gi subset of intersect(intersect(consistent,mdegs),getWordsFromString(cons.go[cons.go$term=="anterograde trans-synaptic signaling","genes"]))
+gi <- c("CACNA1G", "GRIK3","EIF4EBP2","SRC","IQSEC2","GABRQ","CELF4","STX3","BCHE","CHRM4")
+
+h <- SEtools::sechm(sem, g, anno_columns=c("treatment","genotype"), use_raster=TRUE,
+              gaps_at=c("system"), breaks=0.98, row_names_gp = gpar(fontsize = 10.5),
+              row_title="Rescued potassium ion transport DEGs\n(consistent between WBS and REST inhibitor)")
+
+
+
+rest <- intersect(names(regulon$REST[[1]]), consistent)
+h2 <- SEtools::sechm(sem, rest, anno_columns=c("treatment","genotype"), use_raster=TRUE,
+               gaps_at=c("system"), breaks=0.98, row_names_gp = gpar(fontsize = 10.5),
+               row_title="REST targets consistent\nbetween WBS and REST inhibitor")
+
+h3 <- SEtools::sechm(sem, setdiff(grep("^RPL|^RPS|^EIF",consistent,value=TRUE),c("RPS6KA1","EIF4H")), 
+                     anno_columns=c("treatment","genotype"), use_raster=TRUE, gaps_at=c("system"),
+                     breaks=0.99, row_names_gp = gpar(fontsize = 10.5),
+                     row_title="Rescued\ntranslation-related DEGs")
+h3b <- SEtools::sechm(sem, gi, use_raster=TRUE, anno_columns=c(), name="hm2", show_heatmap_legend=FALSE,
+                   gaps_at=c("system"), breaks=0.98, row_names_gp = gpar(fontsize = 10.5),
+                   row_title="Other rescued\nsynaptic DEGs")    
+```
+
+
+```{r, fig.height=8, fig.width=12.5}
+p <- plot_grid(p1, p2, grid.grabExpr(draw(h, merge_legend=TRUE)), 
+          grid.grabExpr(draw(h3 %v% h3b, merge_legend=TRUE)),
+          rel_heights=c(4,5), scale=0.95, labels="AUTO")
+
+ggsave("rest.pdf", p, height=8, width=12.5)
+
+# 
+# pdf("rest_targets.pdf", height=4, width=5.5)
+# draw(h2, merge_legend=TRUE)
+# dev.off()
+```
+
+
+
+
+# Only most relevant genes
+
+```{r}
+g <- c("KCNH3","NOS1AP", "HCN3", "KCNQ3", "KCNK4", "KCNS2", "ATP1A1", "KCNK12", "KCNJ4")
+
+h1b <- SEtools::sechm(sem, g, 
+                     anno_columns=c("treatment","genotype"), use_raster=TRUE, gaps_at=c("system"),
+                     breaks=0.99, row_names_gp = gpar(fontsize = 10),
+                     row_title="ion\nchannels")
+h3 <- SEtools::sechm(sem, setdiff(grep("^RPL|^RPS|^EIF",consistent,value=TRUE),c("RPS6KA1","EIF4H")), 
+                     anno_columns=c(), use_raster=TRUE, gaps_at=c("system"),
+                     breaks=0.99, row_names_gp = gpar(fontsize = 10),
+                     row_title="translation")
+h3b <- SEtools::sechm(sem, gi, use_raster=TRUE, anno_columns=c(), name="hm2", show_heatmap_legend=FALSE,
+                   gaps_at=c("system"), breaks=0.98, row_names_gp = gpar(fontsize = 10),
+                   row_title="synaptic")    
+
+h1b %v% h3 %v% h3b
+```
+

@@ -1,0 +1,78 @@
+---
+title: "iso RPF standardized"
+author: "Pierre-Luc"
+date: "2/26/2019"
+output: html_document
+---
+
+# SE objects
+
+```{r}
+suppressPackageStartupMessages({
+  library(SummarizedExperiment)
+  library(edgeR)
+})
+source("../../misc.R")
+source("../../misc/enrichmentAnalysis.R")
+load("../../misc/ensg2symbol.RData")
+
+prepSE <- function(rna){
+  RD <- data.frame(stable_id=row.names(rna), Length=rna$Length)
+  RD$symbol <- ensg2symbol[row.names(rna)]
+  w <- which(is.na(RD$symbol))
+  RD$symbol[w] <- row.names(rna)[w]
+  row.names(rna) <- row.names(RD) <- paste(RD$stable_id, RD$symbol, sep=".")
+  rna <- rna[,-1:-5]
+  colnames(rna) <- sapply(strsplit(colnames(rna),"_",fixed=T),FUN=function(x){ if(length(x)==1) return(x); x[[2]] })
+  CD <- data.frame( row.names = colnames(rna), type="iPSC", genotype="CTRL", 
+                    individual=rep("242",ncol(rna)), stringsAsFactors=F )
+  CD$type[grep("Neuron",colnames(rna))] <- "Neurons"
+  CD$genotype[grep("WBS",colnames(rna))] <- "WBS"
+  CD$genotype[grep("DUP",colnames(rna))] <- "DUP"
+  CD$WBSCN <- c(WBS=1, CTRL=2, DUP=3)[as.character(CD$genotype)]
+  RNA <- SummarizedExperiment(list(counts=as.matrix(rna)), colData=CD, rowData=RD)
+  RNA[,order(RNA$type, RNA$WBSCN)]
+}
+rna <- read.delim("RNA-L29_CDS.counts.gz", header=T, row.names=1, skip=1)
+RNA <- prepSE(rna)
+
+rpf <- read.delim("RPF_CDS.counts.gz", header=T, row.names=1, skip=1)
+colnames(rpf) <- gsub("RPF","iPSC",colnames(rpf))
+load("neurons_TE/iN_RNA_RIBO_TE.Rds")
+r2 <- ribo_iN_counts
+r2$Length <- NULL
+colnames(r2) <- gsub("_","",gsub("iN_RPF_","Neurons",colnames(r2)))
+RPF <- prepSE(cbind(rpf, r2))
+```
+
+Neurons:
+
+```{r}
+rna <- RNA[,which(RNA$type=="Neurons")]
+rpf <- RPF[,which(RPF$type=="Neurons")]
+rna <- rna[,intersect(colnames(rna),colnames(rpf))]
+en <- log(cpm(calcNormFactors(DGEList(cbind(assay(rna),assay(rpf)))))+0.1)
+assays(rna)$logcpm <- en[,1:8]
+assays(rpf)$logcpm <- en[,9:16]
+TE <- SummarizedExperiment(list(log2TE=assays(rpf)$logcpm-assays(rna)$logcpm), rowData=rowData(rna), colData=colData(rna))
+SE <- SummarizedExperiment(list(RNA.counts=assay(rna), RNA.logcpm=assays(rna)$logcpm, RPF.counts=assay(rpf), RPF.logcpm=assays(rpf)$logcpm, log2TE=assay(TE)), rowData=rowData(rna), colData=colData(rna))
+saveRDS(SE, file="../clean/Neurons/RPF/Neurons.riboAllAssays.isogenic.SE.rds")
+saveRDS(rpf, file="../clean/Neurons/RPF/Neurons.RPF.isogenic.SE.rds")
+saveRDS(rna, file="../clean/Neurons/RNA/Neurons.RNA.isogenicFromRiboseq.SE.rds")
+saveRDS(TE, file="../clean/Neurons/TE/Neurons.RNA.isogenic.SE.rds")
+```
+
+# TE - DEA and enrichment analysis
+
+```{r}
+ll <- list(reg=read.delim("neurons_TE/iN_CN_TE_results.txt", header=T,row.names = 1))
+ff <- list.files("neurons_TE/",pattern="res_TE\\.txt", full.names = T)
+names(ff) <- c("DUP","DUPvsWBS","WBS")
+ll <- c(ll,lapply(ff, sep=" ",FUN=read.delim))
+dea <- cbindDEAs(ll[c(1,4,2:3)])
+row.names(dea) <- paste(row.names(dea), ensg2symbol[row.names(dea)], sep=".")
+saveRDS(dea, file="../clean/Neurons/TE/Neurons.TE.isogenic.DEA.rds")
+ea <- runAllEA(dea)
+saveRDS(ea, file="../clean/Neurons/TE/Neurons.TE.isogenic.DEA.enrichments.rds")
+```
+

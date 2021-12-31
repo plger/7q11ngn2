@@ -1,0 +1,196 @@
+---
+title: "Rest inhibitor"
+output:
+    html_document:
+        toc: true
+        toc_float: true
+        theme: 'cerulean'
+        highlight: 'tango'
+        code_folding: hide
+        df_print: paged
+---
+
+<style>
+  .main-container {
+    max-width: 1500px !important;
+  }
+</style>
+
+=====================
+Pierre-Luc Germain - `r format(Sys.time(), '%d %B, %Y')`
+<br><br><br>
+
+```{r}
+suppressPackageStartupMessages({
+  library(SummarizedExperiment)
+  library(SEtools)
+  library(ggplot2)
+  library(cowplot)
+  library(ggrepel)
+  library(grid)
+  library(DESeq2)
+  library(limma)
+  library(viper)
+  #library(GTscripts)
+  library(edgeR)
+})
+source("../../../colors.R")
+source("../../../misc.R")
+source("../../../volcanoDEGs.R")
+source("../../../enrichmentAnalysis.R")
+theme_set(theme_cowplot())
+```
+
+# Rest inhibitor - differential expression analysis
+
+```{r}
+se <- readRDS("coding.genes.SE.rds")
+se$genotype <- "WBS"
+se$treatment <- rep(c("DMSO","RestInhibitor"), each=3)
+assays(se)$logcpm <- log1p(cpm(calcNormFactors(DGEList(assay(se)))))
+se <- SEtools::log2FC(se, fromAssay = "logcpm", controls = se$treatment=="DMSO")
+e <- filterGenesByCount(assay(se),se$treatment)
+dds <- DESeqDataSetFromMatrix(floor(e),as.data.frame(colData(se)),~treatment)
+dds <- DESeq(dds)
+res <- homogenizeDEAresults(lfcShrink(dds,contrast=c("treatment","RestInhibitor","DMSO")))
+degs <- getDEGs(res, log2(1.2))
+volcanoDEGs(res, main="Rest inhibitor")
+```
+
+
+<br/><br/>
+
+## Enrichment analysis
+```{r}
+EA <- runAllEA(res)
+clusterGO(EA$reg$goseq)
+```
+
+## TF analysis
+
+```{r}
+load("~/bioinfo/testa/EDC1/Data/regulon_weighted.RData")
+vi <- viper(assays(se)$logcpm[row.names(res)[res$baseMean>100],], regulon = regulon, pleiotropy = TRUE, verbose = FALSE)
+vi <- SummarizedExperiment(list(vi=vi), colData=colData(se))
+mm <- model.matrix(~treatment, data=as.data.frame(colData(se)))
+fit <- eBayes(lmFit(assay(vi), mm))
+vi.res <- topTable(fit,number = Inf)
+#vi.res <- topTable(fit, colnames(mm)[4:5],number = Inf)
+vi.res$expression.logFC <- res[row.names(vi.res),"logFC"]
+vi.res$expression.FDR <- res[row.names(vi.res),"FDR"]
+stat <- res$stat[res$baseMean>100]
+names(stat) <- row.names(res)[res$baseMean>100]
+msvi <- msviper(stat, regulon = regulon, verbose=FALSE)
+msvi2 <- as.data.frame(msvi$es[c(1,3:5)])
+msvi2 <- msvi2[order(msvi2$p.value),]
+vir <- merge(vi.res, msvi2, by="row.names")
+vir$consistent <- factor(sign(vir$expression.logFC)==sign(vir$nes) & vir$expression.FDR<0.1 & vir$adj.P.Val<0.1 & vir$p.value<0.1)
+vir[vir$Row.names=="REST","consistent"] <- "bold"
+levels(vir$consistent) <- c("plain","bold")
+vir$consistent[is.na(vir$consistent)] <- "plain"
+vir$expression.FDR[is.na(vir$expression.FDR)] <- 1
+w <- which(abs(vir$expression.logFC)>=1)
+vir$expression.logFC[w] <- sign(vir$expression.logFC[w])
+
+EA$reg$viper <- list( res=vir, se=vi )
+
+p1 <- ggplot(vir, aes(nes, -log10(adj.P.Val), size=-log10(expression.FDR),
+                    colour=expression.logFC, label=Row.names, fontface=consistent,
+                    alpha=consistent)) +
+    geom_vline(xintercept = 0, linetype="dashed", colour="gray") + geom_text() +
+    scale_color_gradient2(low = "blue", mid = "darkgrey", high="red") + 
+    ylab("viper -log10(FDR)") + xlab("viper normalized enrichment score") +
+    scale_alpha_manual(values=c(plain=0.5, bold=1), guide=FALSE) +
+    geom_label(data=vir[vir$consistent=="bold",]) + xlim(-5,5) + 
+    ggtitle("Master regulator analysis")
+p1
+```
+
+# Comparison with WBS
+
+```{r, fig.height=5, fig.width=6}
+deam <- toSymbol(readRDS("../../../clean/Neurons/RNA/Neurons.RNA.merged.DEA.rds"))
+sem <- toSymbol(readRDS("../../../clean/Neurons/RNA/Neurons.RNA.merged.SE.rds"))
+iso <- toSymbol(readRDS("../../../clean/Neurons/RNA/Neurons.RNA.isogenic.SE.rds"))
+iso <- SEtools::log2FC(iso, "logcpm", iso$genotype=="CTRL")
+degsm <- union(getDEGs(subset_mDEA(deam),logFC.thres = log2(1.2)), getDEGs(subset_mDEA(deam, "WBS"),logFC.thres = log2(1.2)))
+degsm2 <- intersect(getDEGs(subset_mDEA(deam),logFC.thres = log2(1.2)), getDEGs(subset_mDEA(deam, "WBS"),logFC.thres = log2(1.2)))
+
+assays(sem)$logcpm <- assays(sem)$corrected
+sem2 <- mergeSEs(list(se, sem), use.assays = c("logcpm", "log2FC"), do.scale=c(TRUE,FALSE))
+sem2$Dataset <- c(rep("RestInh",6), sem$Dataset)
+  
+wdegs <- getDEGs(subset_mDEA(deam, "WBS"), logFC.thres = log2(1.2))
+cndegs <- getDEGs(subset_mDEA(deam), logFC.thres = log2(1.2))
+sehm(sem2, wdegs, assayName = "logcpm", 
+     anno_columns = c("treatment","genotype","Dataset"), breaks=0.99, main="All WBS DEGs")
+
+sehm(sem2, intersect(wdegs, getDEGs(res, logFC.thres = log2(1.2))), assayName = "log2FC", anno_columns = c("treatment","genotype","Dataset"), breaks=0.95, main="DEGs in WBS and RestInh")
+
+m <- merge(res, subset_mDEA(deam, "WBS"), by="row.names", suffixes=c(".REST",".WBS"))
+ggplot(m[which(m$FDR.REST<0.01 | m$FDR.WBS<0.01),], aes(-logFC.WBS, logFC.REST)) + geom_point() + geom_smooth() + ggtitle("Significant in either")
+ggplot(m[which(m$FDR.REST<0.05 & m$FDR.WBS<0.05),], aes(-logFC.WBS, logFC.REST)) + geom_point() + ggtitle("Significant in both")
+```
+
+## Genes that are consistent across both systems
+
+```{r}
+m$agg.p <- apply(m[,grep("PValue",colnames(m))], 1, FUN=aggregation::fisher)
+m$agg.fdr <- apply(m[,grep("FDR",colnames(m))], 1, FUN=aggregation::fisher)
+m$sign.consistent <- sign(m$logFC.REST) == -sign(m$logFC.WBS) & abs(m$logFC.REST)>log2(1.1) & abs(m$logFC.WBS)>log2(1.1)
+anti <- m$Row.names[m$agg.fdr<0.05 & (m$FDR.REST<0.05 & m$FDR.WBS<0.05) & !m$sign.consistent]
+m$agg.p[!m$sign.consistent] <- m$agg.fdr[!m$sign.consistent] <- 1
+consistent <- m$Row.names[m$agg.fdr<0.05 & (m$FDR.REST<0.05 | m$FDR.WBS<0.05)]
+cons.go <- goseq.enrichment(consistent, "GO:BP",allGenes = m$Row.names)
+cons.go[,c(2,4,5,7)]
+clusterGO(cons.go, k=c(5,8,10,12,15,20,25)) + ggtitle("Enrichment of consistent DEGs")
+
+EA$consistent <- list(goseq=cons.go)
+
+
+tmpfn <- function(w) sehm(sem2, getWordsFromString(cons.go$genes[w]), assayName = "log2FC",anno_columns = c("treatment","genotype","Dataset"), breaks=0.98, main=paste("consistent DEGs across WBS and Rest inhibitor\n","in ",cons.go$term[w]))
+
+tmpfn(grep("potassium",cons.go$term))
+tmpfn(grep("translation",cons.go$term))
+
+
+rest <- c(intersect(names(regulon$REST[[1]]), consistent),"NPAS4","CACNA1G")
+sehm(sem2, rest, assayName = "log2FC", anno_columns = c("treatment","genotype","Dataset"), breaks=0.95, main="REST targets consistent\nacross WBS and Rest inhibitor")
+```
+
+```{r, fig.height=6, fig.width=6}
+sehm(sem2, intersect(degsm,grep("^KCN",row.names(sem),value=TRUE)), assayName = "log2FC", 
+     anno_columns = c("treatment","genotype","Dataset"), breaks=0.96, main="KCN* DEGs")
+sehm(sem2, intersect(c(degs),grep("^KCN",row.names(sem),value=TRUE)), assayName = "log2FC", 
+     anno_columns = c("treatment","genotype","Dataset"), breaks=0.96, main="KCN* DEGs in RestInhib")
+```
+
+```{r, fig.height=7.5, fig.width=6}
+asd <- readRDS("../../../extData/ID_ASD_genes.rds")
+cons.asd.degs <- intersect(intersect(wdegs,intersect(degs,consistent)),unlist(asd))
+sehm(sem2, cons.asd.degs, assayName = "log2FC", anno_columns = c("treatment","genotype","Dataset"), breaks=0.98, main="Consistent ASD-associated DEGs", show_rownames = TRUE)
+```
+
+## Genes going in the opposite direction
+
+```{r}
+anti.go <- goseq.enrichment(m$Row.names, anti, gotype = "GO:BP")
+clusterGO(anti.go) + ggtitle("Enrichment of genes showing opposite behavior")
+```
+
+
+## RCOR1 targets
+
+RCOR1 targets are affected by the inbhition but largely unaffected by the CNV:
+
+```{r}
+sehm(sem2, intersect(names(regulon$RCOR1$tfmode),degs), assayName = "logcpm",anno_columns = c("treatment","genotype","Dataset"), breaks=0.99)
+```
+
+<br/><br/>
+  
+```{r}
+saveRDS(se, file="../../../clean/Neurons/RNA/Neurons.RNA.rest.SE.rds")
+saveRDS(res, file="../../../clean/Neurons/RNA/Neurons.RNA.rest.DEA.rds")
+saveRDS(EA, file="../../../clean/Neurons/RNA/Neurons.RNA.rest.DEA.enrichments.rds")
+```

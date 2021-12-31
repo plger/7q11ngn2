@@ -1,0 +1,202 @@
+---
+title: "Neurons 1"
+output:
+    html_document:
+        toc: true
+        toc_float: true
+        theme: 'cerulean'
+        highlight: 'tango'
+        code_folding: hide
+        df_print: paged
+---
+
+<style>
+  .main-container {
+    max-width: 1500px !important;
+  }
+</style>
+
+=====================
+Pierre-Luc Germain - `r format(Sys.time(), '%d %B, %Y')`
+<br><br><br>
+
+```{r}
+suppressPackageStartupMessages({
+  library(SummarizedExperiment)
+  library(ComplexHeatmap)
+  library(SEtools)
+  library(ggplot2)
+  library(cowplot)
+  library(ggrepel)
+  library(grid)
+})
+source("../misc.R")
+source("../colors.R")
+source("../misc/compare_and_overlay_TE.R")
+source("../misc/GO.R")
+source("../misc/enrichmentAnalysis.R")
+load("../extData/complexes.RData")
+```
+
+```{r}
+gsets <- getMsigSets()
+names(gsets) <- gsub("GOMF|GOBP|GOCC","GO",names(gsets)) # for newer versions
+```
+
+# Neurons
+
+```{r}
+deas <- list( RNA=readRDS("../clean/Neurons/RNA/Neurons.RNA.isogenic.DEA.rds"),
+              TE=readRDS("../clean/Neurons/TE/Neurons.TE.isogenic.DEA.rds"),
+              Protein=readRDS("../clean/Neurons/Protein/Neurons.Protein.isogenic.DEA.rds") )
+deas <- lapply(deas, toSymbol)
+rna.dea.pD <- toSymbol(readRDS("../clean/Neurons/RNA/Neurons.RNA.patientDerived.DEA.rds"))
+```
+
+
+# Merged analysis of the two systems
+
+```{r, warning=FALSE, message=FALSE}
+dea.rna <- toSymbol(readRDS("../clean/Neurons/RNA/Neurons.RNA.merged.DEA.rds"))
+se.rna <- toSymbol(readRDS("../clean/Neurons/RNA/Neurons.RNA.merged.SE.rds"))
+se.rna <- se.rna[,se.rna$genotype!="AtWBS"]
+se.rna$genotype <- droplevels(se.rna$genotype)
+ea.rna <- readRDS("../clean/Neurons/RNA/Neurons.RNA.merged.DEA.enrichments.rds")
+se.rna$Dataset <- gsub("patientDerived","patient-derived",se.rna$Dataset)
+se.rna$Dataset <- gsub("patient-derived", "patient-\nderived", se.rna$Dataset)
+se.rna$Dataset <- factor(se.rna$Dataset, c("patient-\nderived", "isogenic"))
+
+rna.degs3 <- intersect(getDEGs.any(dea.rna, log2(1.3), 0.01), 
+                       intersect(getDEGs.any(deas$RNA, FDR.thres=0.5),getDEGs.any(rna.dea.pD, FDR.thres=0.5)))
+
+p1 <- grid.grabExpr(draw(sechm(se.rna, rna.degs3, assayName="log2FC", anno_columns="genotype", gaps_at="Dataset", row_title="DEGs from merged analysis", column_title_gp=gpar(fontsize=12.5), use_raster=TRUE), merge_legends=TRUE))
+
+set.seed(42)
+p2 <- clusterGO(ea.rna$reg$goseq[ea.rna$reg$goseq$FDR < 0.01,], fontsize=3.5)
+
+```
+
+```{r}
+asd <- readRDS("../extData/ID_ASD_genes.rds")
+asd$SPARK <- readLines("../extData/spark.genes")
+sfari <- intersect(as.character(unlist(asd$sfari[as.character(1:3)])), rownames(se.rna))
+sfari <- sapply(sfari, FUN=function(x){
+  for(i in as.character(1:3)){
+    if(x %in% asd$sfari[[i]]) return(i)
+  }
+  return(NA)
+})
+
+asdg <- intersect(rna.degs3, c(names(sfari), asd$SPARK))
+
+rowData(se.rna)$SFARI <- NA_character_
+rowData(se.rna)[names(sfari),"SFARI"] <- sfari
+rowData(se.rna)$AutismKB <- rowData(se.rna)$SPARK <- rowData(se.rna)$MSSNG <- rowData(se.rna)$eichler <- FALSE
+rowData(se.rna)[intersect(row.names(se.rna), asd$MSSNG),"MSSNG"] <- TRUE
+rowData(se.rna)[intersect(row.names(se.rna), asd$SPARK),"SPARK"] <- TRUE
+rowData(se.rna)[intersect(row.names(se.rna), asd$EichlerList),"eichler"] <- TRUE
+rowData(se.rna)[intersect(row.names(se.rna), asd$AutismKB),"AutismKB"] <- TRUE
+
+asd2 <- asd[c(1:4,7:9)]
+asd2$SFARI.S <- asd$sfari$S
+asd2[["SFARI 1-2"]] <- c(asd$sfari[["1"]],asd$sfari[["2"]])
+asd2[["SFARI 3-5"]] <- unlist(asd$sfari[c("3",4:5)])
+names(asd2)[[5]] <- "ASD\nVelmeshev (2019)"
+# ea <- plEA(row.names(dea.rna)[!is.na(dea.rna$PValue)], rna.degs, sets = asd2)
+# ea$term <- row.names(ea)
+# ea$proportion <- ea$overlap/ea$nbInSet
+# p <- ggplot(ea, aes(enrichment, -log10(FDR))) + geom_point(aes(size=overlap, colour=proportion), alpha=0.7) + geom_text_repel(aes(label=term)) + scale_y_log10() + scale_color_gradient(low="lightblue", high="darkblue") + ggtitle("Overlap with ASD genes")
+
+# p3 <- grid.grabExpr(draw(sechm(se.rna, genes=asdg, assayName="log2FC", do.scale=FALSE, anno_columns=c("genotype"), gaps_at="Dataset", anno_rows = c("SPARK","SFARI"), row_names_gp=gpar(fontsize=10), column_title_gp=gpar(fontsize=12.5), row_title="Top ASD DEGs", use_raster=TRUE), merge_legends=TRUE, heatmap_legend_side="left", annotation_legend_side="left"))
+p3 <- grid.grabExpr(draw(sechm(se.rna, genes=asdg, assayName="log2FC", do.scale=FALSE, anno_columns=c("genotype"), gaps_at="Dataset", anno_rows = c("SPARK","SFARI"), row_names_gp=gpar(fontsize=10), column_title_gp=gpar(fontsize=12.5), row_title="Top ASD DEGs", use_raster=TRUE, show_annotation_legend=FALSE, show_heatmap_legend=FALSE)))
+```
+
+
+
+```{r}
+# ion-channel
+mg2 <- c("ANXA6","ANO3","RYR2","SLC17A","TTYH2","KCNE5","REST","JPH2","ITPR1","HCN4","CACNA1G","CANCA1I","JPH3","KCNMA1","KCNK12","KCNC3","GRIN1","KCNK4","KCNA5","KCNA4","CACNA1E","NALCN","TRPM2","SHROOM2","KCNA2","ASIC1","FKBP1B","KCNS2","GABRA2","GABRA3","GABRG2","GRIN2B","KCNQ3","GRIK3","GRIK4")
+p4a <- grid.grabExpr(draw(sechm(se.rna, genes=mg2, assayName="log2FC", do.scale=FALSE, anno_columns=c("genotype"), gaps_at="Dataset", row_title="ion channel DEGs", row_names_gp=gpar(fontsize=10), column_title_gp=gpar(fontsize=12.5)), merge_legends=TRUE))
+
+gg <- intersect(rna.degs3,unique(unlist(gsets[grep("ION_CHANNEL", names(gsets))])))
+p4b <- grid.grabExpr(draw(sechm(se.rna, genes=gg, assayName="log2FC", do.scale=FALSE, anno_columns=c("genotype"), gaps_at="Dataset", row_title="ion channel related DEGs", show_rownames=TRUE, breaks=0.985, column_title_gp=gpar(fontsize=12.5), row_names_gp=gpar(fontsize=10)), merge_legends=TRUE))
+
+gg2 <- list(channel=intersect(gsets[[grep("VOLTAGE_GATED_ION_CHANNEL_ACTIVITY",names(gsets))]], c(rna.degs3,"KCNK12","GRIN2B","KCNK4","KCNA4")),
+            regulator=intersect(gsets[[grep("ION_CHANNEL_REGULATOR_ACTIVITY",names(gsets))]], rna.degs3))
+rowData(se.rna)$channel <- FALSE
+rowData(se.rna)$channel[row.names(se.rna) %in% gg2$channel] <- TRUE
+# p4c <- grid.grabExpr(draw(sechm(se.rna, genes=unique(unlist(gg2)), assayName="log2FC", do.scale=FALSE, anno_columns=c("genotype"), gaps_at="Dataset", row_title="ion channel related DEGs", show_rownames=TRUE, row_names_gp=gpar(fontsize=9.5), column_title_gp=gpar(fontsize=12.5), breaks=0.985, use_raster=TRUE, show_annotation_legend=FALSE, show_heatmap_legend=FALSE), merge_legends=TRUE))
+p4c <- grid.grabExpr(draw(sechm(se.rna, genes=unique(unlist(gg2)), assayName="log2FC", do.scale=FALSE, anno_columns=c("genotype"), gaps_at="Dataset", row_title="ion channel related DEGs", show_rownames=TRUE, row_names_gp=gpar(fontsize=9.5), column_title_gp=gpar(fontsize=12.5), breaks=0.985, use_raster=TRUE), merge_legends=TRUE, heatmap_legend_side="left", annotation_legend_side="left"))
+```
+
+```{r}
+gt <- getWordsFromString(ea.rna$reg$goseq$genes[ea.rna$reg$goseq$term=="cytoplasmic translation"])
+p5 <- grid.grabExpr(draw(sechm(se.rna, genes=gt, assayName="log2FC", do.scale=FALSE, anno_columns=c("genotype"), gaps_at="Dataset", row_title="Cytoplasmic translation DEGs", show_rownames=TRUE, row_names_gp=gpar(fontsize=10), column_title_gp=gpar(fontsize=12.5), breaks=0.985, show_annotation_legend=FALSE, show_heatmap_legend=FALSE, use_raster=TRUE), merge_legends=TRUE))
+```
+
+
+```{r, fig.width=10, fig.height=7}
+# c(0.42,0.3,0.3)
+mp2 <- plot_grid(rel_widths=c(0.38,0.3,0.34), scale=0.95,
+  p4c, p5, p3, nrow=1 #, labels=LETTERS[3:5]
+)
+mp2
+```
+
+# Protein-level
+
+```{r}
+se.prot <- toSymbol(readRDS("../clean/Neurons/Protein/Neurons.Protein.merged.SE.rds"))
+se.prot <- se.prot[,se.prot$genotype!="AtWBS"]
+se.prot$genotype <- droplevels(se.prot$genotype)
+
+dea.prot <- toSymbol(readRDS("../clean/Neurons/Protein/Neurons.Protein.merged.DEA.rds"))
+se.prot$system <- gsub("patientDerived", "patient-derived", se.prot$Dataset)
+se.prot <- se.prot[rowSums(is.na(assays(se.prot)$intensity))<3,]
+se.rna$system <- gsub("\n","",se.rna$Dataset)
+
+adegs <- unique(c(rna.degs3, getDEGs.any(dea.prot, FDR.thres=0.1)))
+
+go <- c("CTRL"=2,"WBS"=1,"AtWBS"=1.5,"DUP"=3)
+ll <- list(
+  RNA=se.rna[,order(go[as.character(se.rna$genotype)])],
+  Protein=se.prot[,order(go[as.character(se.prot$genotype)])])
+se <- SEtools::mergeSEs(ll, "log2FC", do.scale=FALSE)
+se$Dataset <- factor(se$Dataset, levels=c("RNA","Protein"))
+se$system <- gsub("patient-derived","patient-\nderived",se$system)
+
+p6 <- grid.grabExpr(draw(sechm(se, adegs, assayName="log2FC", gaps_at="Dataset", anno_columns=c("genotype","system"), row_title="Union of RNA and Protein DEGs", use_raster=TRUE), merge_legends=TRUE))
+```
+
+
+
+```{r}
+ea <- readRDS("../clean/Neurons/Protein/Neurons.Protein.merged.DEA.enrichments.rds")
+cam <- ea$reg$camera
+cam <- cam[cam$collection=="C5" & cam$subcat!="HPO" & cam$FDR<0.1,]
+p7 <- camPlot(cam, dea.prot, n=8, rel_widths=c(2,3), breakAt=25)
+p7
+```
+
+
+```{r, fig.width=9, fig.height=12.5}
+pp <- plot_grid(
+  plot_grid(p1, p2, rel_widths=c(2,3), scale=0.95, labels="AUTO"),
+  plot_grid(rel_widths=c(0.38,0.3,0.34), scale=0.95, p4c, p5, p3, nrow=1,
+            labels=LETTERS[3:5]),
+  plot_grid(p6, p7, rel_widths=c(2,3), scale=0.95, labels=LETTERS[6:7]),
+  nrow=3, rel_heights=c(3,4,3)
+)
+ggsave("neurons_omics_overview3.pdf", pp, width=9, height=12.5)
+pp
+```
+
+
+
+
+
+
+
+
+
+

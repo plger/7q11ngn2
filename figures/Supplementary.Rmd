@@ -1,0 +1,174 @@
+---
+title: "Other bioinfo supplementary Figures"
+output:
+    html_document:
+        toc: true
+        toc_float: true
+        theme: 'cerulean'
+        highlight: 'tango'
+        code_folding: hide
+        df_print: paged
+---
+
+<style>
+  .main-container {
+    max-width: 1500px !important;
+  }
+</style>
+
+=====================
+Pierre-Luc Germain - `r format(Sys.time(), '%d %B, %Y')`
+<br><br><br>
+
+
+```{r}
+suppressPackageStartupMessages({
+  library(SummarizedExperiment)
+  library(SEtools)
+  library(ggplot2)
+  library(cowplot)
+  library(ggrepel)
+  library(grid)
+  library(viper)
+  library(limma)
+  library(ComplexHeatmap)
+})
+source("../misc.R")
+source("../colors.R")
+source("../misc/GO.R")
+source("../misc/enrichmentAnalysis.R")
+load("../extData/complexes.RData")
+theme_set(theme_cowplot(11))
+theme_replace(text=element_text(family="Arial", face="bold", colour="black"))
+```
+
+
+
+# isogenic vs patient-derived iNeurons
+
+```{r}
+se <- readRDS("../clean/Neurons/RNA/Neurons.RNA.merged.SE.rds")
+se <- se[,se$genotype!="AtWBS"]
+se$genotype <- droplevels(se$genotype)
+degs.iso <- getDEGs.any(readRDS("../clean/Neurons/RNA/Neurons.RNA.isogenic.DEA.rds"), FDR.thres=0.001, logFC.thres=log2(1.3))
+degs.pD <- getDEGs.any(readRDS("../clean/Neurons/RNA/Neurons.RNA.patientDerived.DEA.rds"))
+se$Dataset[se$Dataset=="patientDerived"] <- "patient-\nderived"
+h1 <- sechm(se, degs.pD, do.scale=FALSE, assayName="log2FC", gaps_at="Dataset", use_raster=TRUE, width=unit(4, "cm"),
+            anno_columns="genotype", row_title="Patient-derived DEGs", breaks=0.985, show_heatmap_legend=FALSE, show_annotation_legend=FALSE, isMult=TRUE)
+h2 <- sechm(se, degs.iso, do.scale=FALSE, assayName="log2FC", gaps_at="Dataset", use_raster=TRUE, width=unit(4, "cm"),
+            anno_columns="genotype", row_title="Isogenic DEGs", breaks=0.985)
+```
+
+```{r, fig.width=4.5, fig.height=5}
+ph <- plot_grid(grid.grabExpr(draw(h1, merge_legends=TRUE)), 
+          grid.grabExpr(draw(h2, merge_legends=TRUE)), 
+          nrow=1, scale=0.95)
+```
+
+# Condition-specific GO
+
+```{r, fig.width=5.5, fig.height=5.5}
+ea <- readRDS("../clean/Neurons/RNA/Neurons.RNA.merged.DEA.enrichments.rds")
+set.seed(123)
+p1 <- clusterGO(ea$WBS$goseq, k = 5, fontsize=3) + ggtitle("WBS vs CTRL")
+p2 <- clusterGO(ea$DUP$goseq, k = 5, fontsize=3) + ggtitle("DUP vs CTRL")
+plot_grid(p1, p2, nrow=2, scale=0.95)
+```
+
+```{r, fig.width=10, fig.height=5.5}
+plot_grid(ph, plot_grid(p1, p2, nrow=2, scale=0.95), labels="AUTO", nrow=1, rel_widths=c(4.5,5.5))
+pdf("S4_top.pdf", width=10, height=5.5)
+plot_grid(ph, plot_grid(p1, p2, nrow=2, scale=0.95), labels="AUTO", nrow=1, rel_widths=c(4.5,5.5))
+dev.off()
+```
+
+
+# Complex-mediated buffering
+
+```{r}
+rna <- toSymbol(readRDS("../clean/Neurons/RNA/Neurons.RNA.merged.DEA.rds"))
+prot <- toSymbol(readRDS("../clean/Neurons/Protein/Neurons.Protein.merged.DEA.rds"))
+m <- merge(rna,prot,by=0,suffix=c(".RNA",".Prot"))
+md <- rbind(
+  data.frame(gene=m$Row.names[which(m$FDR.DUP.RNA<0.05)], condition="7Dup",
+             RNA=m$logFC.DUP.RNA[which(m$FDR.DUP.RNA<0.05)],
+             Protein=m$logFC.DUP.Prot[which(m$FDR.DUP.RNA<0.05)]),
+  data.frame(gene=m$Row.names[which(m$FDR.WBS.RNA<0.05)], condition="WBS",
+             RNA=m$logFC.WBS.RNA[which(m$FDR.WBS.RNA<0.05)],
+             Protein=m$logFC.WBS.Prot[which(m$FDR.WBS.RNA<0.05)]))
+md$diff <- md$Protein-md$RNA
+load("../extData/complexes.RData")
+md$inComplex <- md$gene %in% unlist(complexes)
+md <- dplyr::bind_rows(lapply(split(md, paste(md$condition, sign(md$RNA), md$inComplex)), FUN=function(x){
+  x <- x[which(!is.na(x$diff) & !is.infinite(x$diff)),]
+  x <- x[order(x$diff),]
+  x$rank <- seq_along(x$diff)/nrow(x)
+  x
+}))
+md$dir <- ifelse(sign(md$RNA)>0, "upregulated in", "downregulated in")
+tmp <- data.frame(dir=rep(c("downregulated in","upregulated in"),each=4), condition=rep(c("7Dup","WBS"),4),
+                  rank=c(0.9,0.1,0.1,0.9,0.1,0.1,0.1,0.9), diff=rep(c(-1,1,1,-1),2),
+                  label=rep(c("amplification","buffering","amplification","buffering"),each=2))
+```
+
+
+```{r, fig.width=8, fig.height=3}
+bp <- ggplot(md, aes(diff, rank, colour=inComplex)) + geom_vline(xintercept=0, linetype="dashed") +
+  geom_line(size=1.5) + facet_wrap(~paste(dir,condition)) + 
+  xlim(-1.5,1.5) + xlab("logFC difference (Protein-RNA)") + ylab("Cumulative distribution") +
+  geom_text(data=tmp, aes(label=label), colour="darkgrey") + scale_y_continuous(breaks=c(0,0.5,1))
+pdf("buff_complex.pdf", width=8, height=3)
+bp
+dev.off()
+```
+
+
+
+
+# REST inhibition
+
+```{r}
+ea <- readRDS("../clean/Neurons/RNA/Neurons.RNA.rest.DEA.enrichments.rds")
+res <- toSymbol(readRDS("../clean/Neurons/RNA/Neurons.RNA.rest.DEA.rds"))
+se <- toSymbol(readRDS("../clean/Neurons/RNA/Neurons.RNA.rest.SE.rds"))
+metadata(se)$anno_colors <- list(treatment=c("DMSO"="lightgrey", "RestInhibitor"="darkgreen"))
+deam <- toSymbol(readRDS("../clean/Neurons/RNA/Neurons.RNA.merged.DEA.rds"))
+sem <- toSymbol(readRDS("../clean/Neurons/RNA/Neurons.RNA.merged.SE.rds"))
+iso <- toSymbol(readRDS("../clean/Neurons/RNA/Neurons.RNA.isogenic.SE.rds"))
+#iso <- SEtools::log2FC(iso, "logcpm", iso$genotype=="CTRL")
+degsm <- union(getDEGs(subset_mDEA(deam),logFC.thres = log2(1.2)), getDEGs(subset_mDEA(deam, "WBS"),logFC.thres = log2(1.2)))
+degsm2 <- intersect(getDEGs(subset_mDEA(deam),logFC.thres = log2(1.2)), getDEGs(subset_mDEA(deam, "WBS"),logFC.thres = log2(1.2)))
+
+assays(sem)$logcpm <- assays(sem)$corrected
+sem2 <- mergeSEs(list(se, sem), use.assays = c("logcpm", "log2FC"), do.scale=c(TRUE,FALSE))
+sem2$Dataset <- c(rep("RestInh",6), sem$Dataset)
+sem2$isctrl <- (sapply(sem2$treatment=="DMSO", isTRUE) | sapply(sem2$genotype=="CTRL",isTRUE))
+sem2 <- log2FC(sem2, "logcpm", sem2$isctrl, by="Dataset")
+sem2$Dataset <- factor(sem2$Dataset)
+levels(sem2$Dataset) <- c("isogenic","patient-\nderived","REST\ninhibition")
+  
+wdegs <- getDEGs(subset_mDEA(deam, "WBS"), logFC.thres = log2(1.2))
+cndegs <- getDEGs(subset_mDEA(deam), logFC.thres = log2(1.2))
+
+h1 <- sechm(sem2, getDEGs(res, logFC.thres=log2(1.2), FDR.thres=0.01), height=unit(9, "cm"),
+            assayName = "log2FC", gaps_at="Dataset", anno_columns = c("treatment","genotype"), 
+            breaks=0.99, row_title="All REST inhibition DEGs", column_title_gp=gpar(fontsize=12),
+            use_raster=TRUE)
+
+h2 <- sechm(sem2, wdegs, assayName = "scaledLFC", gaps_at="Dataset", height=unit(9, "cm"),
+            anno_columns = c("treatment","genotype"), breaks=0.96, column_title_gp=gpar(fontsize=12),
+            row_title="All WBS DEGs", name="scaled\nlog2FC", use_raster=TRUE)
+
+set.seed(1234)
+gop <- clusterGO(ea$reg$goseq) + ggtitle("GO enrichments of the effects of REST inhibition in iNeurons")
+```
+
+
+```{r, fig.width=8, fig.height=8.5}
+plot_grid( gop, 
+  plot_grid(grid.grabExpr(draw(h1, merge_legends=TRUE)), 
+            grid.grabExpr(draw(h2, merge_legends=TRUE)), 
+            nrow=1, labels=LETTERS[2:3]),
+  nrow=2, labels=c("A",""), rel_heights=c(4,5))
+```
+

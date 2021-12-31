@@ -1,0 +1,145 @@
+---
+title: "7q11.23 translation project - Neurons RNAseq"
+output:
+    html_document:
+        toc: true
+        toc_float: true
+        theme: 'cerulean'
+        highlight: 'tango'
+        code_folding: hide
+        df_print: paged
+---
+
+=====================
+Pierre-Luc Germain - `r format(Sys.time(), '%d %B, %Y')`
+<br><br><br>
+
+# Preprocessing
+
+```{r}
+suppressPackageStartupMessages(library(GTscripts))
+suppressPackageStartupMessages(library(DESeq2))
+source("../../misc.R")
+source("../../misc/volcanoDEGs.R")
+source("../../misc/enrichmentAnalysis.R")
+```
+
+# Patient-derived
+
+```{r}
+se <- readRDS("../../clean/Neurons/RNA/Neurons.RNA.patientDerived.SE.rds")
+```
+
+## Differential expression analysis
+
+Using DESeq2:
+
+### Regression on copynumber
+
+```{r, fig.width=8, fig.height=8}
+e <- filterGenesByCount(assay(se),se$genotype)
+d <- colData(se)
+d$WBSCN <- c("WBS"=1,"AtWBS"=1,"CTRL"=2,"DUP"=3)[as.character(d$genotype)]
+dds <- DESeqDataSetFromMatrix(floor(e),d,~WBSCN)
+dds <- DESeq(dds)
+cn <- homogenizeDEAresults(results(dds))
+volcanoDEGs(cn,main="Regression on copynumber",xlim=c(-4,4),maxdot=40,lfc=log2(1.3))
+```
+
+
+<br/><br/>
+
+
+### Treating genotypes are factors
+
+(AtWBS is considered as WBS; logFC are shrinked)
+
+```{r, fig.width=8, fig.height=8}
+d$genFact <- factor(d$genotype,c("CTRL","WBS","DUP"))
+d$genFact[is.na(d$genFact)] <- "WBS"
+dds <- DESeqDataSetFromMatrix(floor(e),d,~genFact)
+dds <- DESeq(dds)
+wbs <- homogenizeDEAresults(lfcShrink(dds,contrast=c("genFact","WBS","CTRL")))
+dup <- homogenizeDEAresults(lfcShrink(dds,contrast=c("genFact","DUP","CTRL")))
+dupvswbs <- homogenizeDEAresults(lfcShrink(dds,contrast=c("genFact","DUP","WBS")))
+volcanoDEGs(wbs,main="WBS vs CTRL",xlim=c(-1,1),maxdot=40)
+volcanoDEGs(dup,main="Dup vs CTRL",xlim=c(-2,2),maxdot=40)
+```
+
+
+<br/><br/>
+
+### Enrichment analysis
+```{r}
+m <- cbindDEAs(list(reg=cn, WBS=wbs, DUP=dup, DUPvsWBS=dupvswbs))
+asd <- readRDS("../../clean/extDat/ASD_genelists.rds")
+EA <- runAllEA(m, addSets = asd)
+```
+
+<br/><br/>
+
+```{r}
+saveRDS(m, file="../../clean/Neurons/RNA/Neurons.RNA.patientDerived.DEA.rds")
+saveRDS(EA, file="../../clean/Neurons/RNA/Neurons.RNA.patientDerived.DEA.enrichments.rds")
+```
+
+
+<br/><br/>
+
+
+# Isogenic
+
+```{r}
+se <- readRDS("../../clean/Neurons/RNA/Neurons.RNA.isogenic.SE.rds")
+```
+
+## Differential expression analysis
+
+### Regression on copynumber
+
+```{r, fig.width=8, fig.height=8}
+e <- filterGenesByCount(assay(se),se$genotype)
+d <- colData(se)
+d$WBSCN <- c("WBS"=1,"AtWBS"=1,"CTRL"=2,"DUP"=3)[as.character(d$genotype)]
+dds <- DESeqDataSetFromMatrix(floor(e),d,~WBSCN)
+dds <- DESeq(dds)
+cn <- homogenizeDEAresults(results(dds))
+volcanoDEGs(cn,main="Regression on copynumber",xlim=c(-4,4),maxdot=40,lfc=log2(1.3))
+```
+
+
+<br/><br/>
+
+
+### Treating genotypes are factors
+
+(AtWBS is considered as WBS; logFC are shrinked)
+
+```{r, fig.width=8, fig.height=8}
+d$genFact <- factor(d$genotype,c("CTRL","WBS","DUP"))
+d$genFact[is.na(d$genFact)] <- "WBS"
+dds <- DESeqDataSetFromMatrix(floor(e),d,~genFact)
+dds <- DESeq(dds)
+wbs <- homogenizeDEAresults(lfcShrink(dds,contrast=c("genFact","WBS","CTRL")))
+dup <- homogenizeDEAresults(lfcShrink(dds,contrast=c("genFact","DUP","CTRL")))
+dupvswbs <- homogenizeDEAresults(lfcShrink(dds,contrast=c("genFact","DUP","WBS")))
+volcanoDEGs(wbs,main="WBS vs CTRL",xlim=c(-1,1),maxdot=40)
+volcanoDEGs(dup,main="Dup vs CTRL",xlim=c(-2,2),maxdot=40)
+```
+
+
+<br/><br/>
+
+### Enrichment analysis
+```{r}
+m <- cbindDEAs(list(reg=cn, WBS=wbs, DUP=dup, DUPvsWBS=dupvswbs))
+asd <- readRDS("../../clean/extDat/ASD_genelists.rds")
+EA <- runAllEA(m, addSets = asd)
+```
+
+<br/><br/>
+
+```{r}
+saveRDS(m, file="../../clean/Neurons/RNA/Neurons.RNA.isogenic.DEA.rds")
+saveRDS(EA, file="../../clean/Neurons/RNA/Neurons.RNA.isogenic.DEA.enrichments.rds")
+```

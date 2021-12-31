@@ -1,0 +1,176 @@
+---
+title: "7q11.23 translation project - neuron isogenic lines"
+output:
+    html_document:
+        toc: true
+        toc_float: true
+        theme: 'cerulean'
+        highlight: 'tango'
+        code_folding: hide
+        df_print: paged
+---
+
+<style>
+  .main-container {
+    max-width: 1500px !important;
+  }
+</style>
+
+=====================
+Pierre-Luc Germain - `r format(Sys.time(), '%d %B, %Y')`
+<br><br><br>
+
+
+```{r}
+suppressPackageStartupMessages(library(GTscripts))
+suppressPackageStartupMessages(library(DESeq2))
+source("../../misc.R")
+source("../../misc/volcanoDEGs.R")
+source("../../misc/GO.R")
+```
+
+In this version, we'll correct for GTF2I levels when analyzing the impact of the rest of the CNV (regression - doesn't affect pairwise comparisons).
+
+```{r}
+load("isogenic.gene.counts.RData")
+e <- e[which(apply(e,1,FUN=function(x){ sum(x>20)>1 })),]
+d <- data.frame(row.names=colnames(e), genotype=as.factor(rep(c("WBS","CTRL","DUP"),each=3)), CN=rep(1:3,each=3))
+d$GTF2I <- c(1,1,1,0,0,0,1,1,1)
+d
+```
+
+<br/><br/>
+
+# Differential expression analysis
+
+## Pair-wise
+```{r}
+dds <- DESeqDataSetFromMatrix(floor(e),d,~genotype)
+dds <- DESeq(dds)
+```
+
+### WBS
+```{r, fig.width=8, fig.height=8}
+wbs <- homogenizeDEAresults(lfcShrink(dds,contrast=c("genotype","WBS","CTRL")))[,c(2:3,5:6)]
+a <- table(wbs[which(wbs$FDR<0.05),1]>0)
+names(a) <- c("Downregulated","Upregulated")
+a
+volcanoDEGs(wbs,main="WBS vs CTRL",maxdot=40,lfc=log2(1.3),alpha = 0.01)
+printDEA(wbs[which(wbs$FDR<0.05),])
+go.wbs <- goseq.enrichment(row.names(wbs),row.names(wbs)[which(wbs$FDR<0.05)])
+go.wbs
+```
+
+
+<br/><br/>
+
+
+### Dup
+```{r, fig.width=8, fig.height=8}
+dup <- homogenizeDEAresults(lfcShrink(dds,contrast=c("genotype","DUP","CTRL")))[,c(2:3,5:6)]
+a <- table(wbs[which(dup$FDR<0.05),1]>0)
+names(a) <- c("Downregulated","Upregulated")
+a
+volcanoDEGs(dup,main="Dup vs CTRL",maxdot=40,lfc=log2(1.3),alpha = 0.01)
+printDEA(dup[which(dup$FDR<0.05),])
+go.dup <- goseq.enrichment(row.names(dup),row.names(dup)[which(dup$FDR<0.05)])
+go.dup
+```
+
+<br/><br/>
+
+## Regression on copynumber
+```{r}
+dds <- DESeqDataSetFromMatrix(floor(e),d,~GTF2I+CN)
+dds <- DESeq(dds)
+res <- homogenizeDEAresults(results(dds,name="CN"))[,c(2:3,5:6)]
+a <- table(as.factor(res[which(res$FDR<0.05),1]>0))
+names(a) <- c("Downregulated","Upregulated")
+a
+```
+
+Since there are so many significant genes here, for the moment we'll proceed with FDR<0.01:
+
+```{r, fig.width=8, fig.height=8}
+volcanoDEGs(res,main="Regression on copynumber",maxdot=40,lfc=log2(1.3),alpha = 0.01, xlim=c(-3,+4))
+printDEA(res[which(res$FDR<0.05),])
+go <- goseq.enrichment(row.names(res),row.names(res)[which(res$FDR<0.01 & abs(res$logFC)>log2(1.3))],gotype = "GO:BP")
+go
+```
+
+```{r, fig.width=9, fig.height=7}
+goTreemap(go[which(go$FDR<0.05),],title="Most specific enrichments")
+```
+
+<br/><br/>
+
+## Regression on GTF2I
+```{r}
+dds <- DESeqDataSetFromMatrix(floor(e),d,~CN+GTF2I)
+dds <- DESeq(dds)
+res.g2i <- homogenizeDEAresults(results(dds,name="GTF2I"))[,c(2:3,5:6)]
+a <- table(as.factor(res.g2i[which(res.g2i$FDR<0.05),1]>0))
+names(a) <- c("Downregulated","Upregulated")
+a
+```
+Since there are so many significant genes here, for the moment we'll proceed with FDR<0.01:
+
+```{r, fig.width=8, fig.height=8}
+volcanoDEGs(res.g2i,main="Regression on GTF2I",maxdot=40,lfc=log2(1.3),alpha = 0.01)
+printDEA(res.g2i[which(res.g2i$FDR<0.05),])
+go.g2i <- goseq.enrichment(row.names(res.g2i),row.names(res.g2i)[which(res.g2i$FDR<0.01 & abs(res.g2i$logFC)>log2(1.3))],gotype = "GO:BP")
+go.g2i
+```
+
+```{r, fig.width=9, fig.height=7}
+goTreemap(go.g2i[which(go.g2i$FDR<0.05),],title="Most specific enrichments")
+```
+
+
+<br/><br/>
+
+## Overview
+
+Overlaps of the DEGs, using q<0.05 for pairwise comparisons, and q<0.01 for regression on copynumber:
+
+```{r, fig.width=8, fig.height=8}
+degs <- list( WBS.down=row.names(wbs)[which(wbs$logFC<0 & wbs$FDR<0.05)], 
+              WBS.up=row.names(wbs)[which(wbs$logFC>0 & wbs$FDR<0.05)], 
+              DUP.down=row.names(dup)[which(dup$logFC<0 & dup$FDR<0.05)], 
+              DUP.up=row.names(dup)[which(dup$logFC>0 & dup$FDR<0.05)], 
+              regCN.pos=row.names(res)[which(res$logFC>0 & res$FDR<0.01)], 
+              regCN.neg=row.names(res)[which(res$logFC<0 & res$FDR<0.01)],
+              regGTF2I.pos=row.names(res.g2i)[which(res.g2i$logFC>0 & res.g2i$FDR<0.01)], 
+              regGTF2I.neg=row.names(res.g2i)[which(res.g2i$logFC<0 & res.g2i$FDR<0.01)]
+              )
+multintersect(degs,universe=row.names(res))
+```
+
+### Overlaps with disease-related genes:
+
+```{r, fig.width=8, fig.height=8}
+load("../../extData/ID_ASD_genes.RData")
+multintersect(degs,gl,universe=row.names(res))
+```
+```{r}
+lapply(degs, y=unique(c(gl$MSSNG,gl$EichlerList)), FUN=intersect)
+```
+<br/><br/>
+
+# Merging and saving
+
+```{r}
+m <- res[order(res$FDR,res$PValue),]
+m$logFC.wbs <- wbs[row.names(m),"logFC"]
+m$logFC.dup <- dup[row.names(m),"logFC"]
+m$logFC.GTF2I <- res.g2i[row.names(m),"logFC"]
+m$PValue.wbs <- wbs[row.names(m),"PValue"]
+m$FDR.wbs <- wbs[row.names(m),"FDR"]
+m$PValue.dup <- dup[row.names(m),"PValue"]
+m$FDR.dup <- dup[row.names(m),"FDR"]
+m$PValue.GTF2I <- res.g2i[row.names(m),"PValue"]
+m$FDR.GTF2I <- res.g2i[row.names(m),"FDR"]
+plWriteDEA(m,"isogenics_DEA.tab")
+save(wbs,dup,res,go.wbs,go.dup,go,res.g2i,go.g2i,degs,m,file="isogenic_DEAs.RData")
+printDEA(m[which(m$FDR<0.1),])
+```

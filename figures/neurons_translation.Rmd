@@ -1,0 +1,222 @@
+---
+title: "Neurons 2"
+output:
+    html_document:
+        toc: true
+        toc_float: true
+        theme: 'cerulean'
+        highlight: 'tango'
+        code_folding: hide
+        df_print: paged
+---
+
+<style>
+  .main-container {
+    max-width: 1500px !important;
+  }
+</style>
+
+=====================
+Pierre-Luc Germain - `r format(Sys.time(), '%d %B, %Y')`
+<br><br><br>
+
+
+```{r, message=FALSE}
+suppressPackageStartupMessages({
+  library(SummarizedExperiment)
+  library(SEtools)
+  library(ggplot2)
+  library(ggrepel)
+  library(cowplot)
+  library(grid)
+  library(ComplexHeatmap)
+})
+source("../misc.R")
+source("../misc/enrichmentAnalysis.R")
+source("../misc/crossLayer.R")
+source("../colors.R")
+```
+
+```{r}
+gsets <- getMsigSets()
+gsets <- gsets[grep("C5:GO", names(gsets), fixed=TRUE)]
+```
+
+
+```{r}
+SEs <- list( RNA=toSymbol(readRDS("../clean/Neurons/RNA/Neurons.RNA.merged.SE.rds")),
+             TE=toSymbol(readRDS("../clean/Neurons/TE/Neurons.TE.isogenic.SE.rds")),
+             Protein=readRDS("../clean/Neurons/Protein/Neurons.Protein.merged.SE.rds") )
+SEs$TE$Dataset <- "isogenic"
+SEs <- lapply(SEs, FUN=function(x){ x$system <- x$Dataset; x })
+SEs$TE <- log2FC(SEs$TE, "logTE", SEs$TE$genotype=="CTRL")
+
+dea <- list( RNA=readRDS("../clean/Neurons/RNA/Neurons.RNA.merged.DEA.rds"),
+             TE=readRDS("../clean/Neurons/TE/Neurons.TE.isogenic.DEA.rds"),
+             Protein=readRDS("../clean/Neurons/Protein/Neurons.Protein.merged.DEA.rds"))
+dea <- lapply(dea, toSymbol)
+SEs$Protein <- SEs$Protein[rowSums(is.na(assays(SEs$Protein)$intensity))<=3,]
+```
+
+
+```{r}
+degs <- union(getDEGs.any(dea$RNA,logFC.thres=log2(1.2), FDR.thres=0.05),
+              getDEGs.any(dea$Protein,logFC.thres=log2(1.2)) )
+
+SEs <- lapply(SEs, FUN=function(x) x[,order(factor(x$genotype,c("WBS","AtWBS","CTRL","DUP")), x$system)])
+sem <- SEtools::mergeSEs(SEs, "log2FC", do.scale=FALSE, commonOnly=TRUE)
+sem$layer <- sem$Dataset <- factor(sem$Dataset, c("RNA","TE","Protein"))
+metadata(sem)$anno_colors <- list()
+degs <- intersect(degs, row.names(sem))
+# restrict to genes going in the same direction in the two protein datasets
+# deas <- list(iso=readRDS("../clean/Neurons/Protein/Neurons.Protein.isogenic.DEA.rds"),
+#              pD=readRDS("../clean/Neurons/Protein/Neurons.Protein.patientDerived.DEA.rds"))
+# deas <- lapply(deas, toSymbol)
+# m <- merge(deas$iso, deas$pD, by="row.names")
+# m <- m[sign(m$logFC.x)==sign(m$logFC.y) & ((m$PValue.x<0.05 & m$PValue.y<0.05) & ,]
+# degs <- intersect(degs,m$Row.names)
+```
+
+## Clustering of RNA+Prot DEGs
+
+```{r}
+binarize <- function(i, obj, lfc.th=0.2, scaled=TRUE){
+  if(scaled){
+    x <- t(scale(t(assays(obj)$log2FC[degs,]), center=FALSE))[,i,drop=FALSE]
+  }else{
+    x <- assays(obj)$log2FC[degs,i,drop=FALSE]
+  }
+  y <- sign(rowMedians(x))*(abs(rowMedians(x))>lfc.th)
+  w <- apply(sign(x),1,FUN=function(x) length(unique(x))>1)
+  #w <- apply(sign(x),1,FUN=function(x) (max(table(x))/length(x))<0.8)
+  y[w] <- y[w]/2
+  y
+}
+b1 <- sapply(split(seq_len(ncol(SEs$Protein)), paste(SEs$Protein$genotype)), obj=SEs$Protein, FUN=binarize)
+b1 <- b1[,grep("AtWBS|CTRL",colnames(b1),invert=TRUE)]
+b2 <- sapply(split(seq_len(ncol(SEs$RNA)), paste(SEs$RNA$genotype)), obj=SEs$RNA, FUN=binarize)
+b2 <- b2[,grep("AtWBS|CTRL",colnames(b2),invert=TRUE)]
+b <- cbind(b1,b2)
+row.names(b) <- degs
+b2 <- b[rowSums(is.na(b))==0,]
+set.seed(123)
+k <- kmeans(b2, 8, nstart=3)
+
+rowData(sem)$cluster <- 0L
+rowData(sem)[row.names(b2),"cluster"] <- k$cluster
+sechm(sem, degs, gaps_row="cluster", do.scale=TRUE)
+```
+
+```{r}
+cl2 <- c("none","convup","fo","convdown","convdown","bd","bd2","convup","fs")
+```
+
+
+
+```{r}
+rowData(sem)$cluster2 <- factor(cl2[1L+rowData(sem)$cluster])
+SEtools::sechm(sem, degs, do.scale=FALSE, anno_columns=c("system", "genotype"), breaks=0.99, gaps_at="Dataset",
+               gaps_row="cluster2")
+```
+
+
+
+```{r, fig.width=10, fig.height=6}
+cs2 <- split(degs, droplevels(rowData(sem)[degs,"cluster2"]))
+go2 <- lapply(cs2, FUN=function(x) goseq.enrichment(row.names(sem), x))
+go3 <- lapply(cs2, FUN=function(x) topgo(row.names(sem), x))
+go.buf <- goseq.enrichment(row.names(sem), cs2[grep("buffered",names(cs2))])
+gobuf <- clusterGO(go.buf,k=6)
+gofo <- clusterGO(go2[[grep("forwarded",names(go2))]])
+gofo
+```
+
+```{r}
+SEtools::sechm(sem, intersect(intersect(getDEGs(dea$Protein, FDR.thres=0.25), cs2$fo), c(asd$SPARK,asd$MSSNG,unlist(asd$sfari))), do.scale=FALSE, anno_columns=c("system", "genotype"), breaks=0.99, show_rownames=TRUE)
+```
+
+
+# logFC scatterplots
+
+```{r}
+wbs <- crossLayer(lapply(dea[c(1,3,2)], suffix="WBS", FUN=subset_mDEA))
+wbs$gene <- row.names(wbs)
+wbs <- wbs[intersect(row.names(wbs), degs),]
+wbs$cluster <- rowData(sem)[row.names(wbs),"cluster"]
+dup <- crossLayer(lapply(dea[c(1,3,2)], suffix="DUP", FUN=subset_mDEA))
+dup$cluster <- rowData(sem)[row.names(dup),"cluster"]
+dup$gene <- row.names(dup)
+dup <- dup[intersect(row.names(dup), degs),]
+wdup <- which(dup$PValue.TE<0.01 & (dup$translational | dup$buffered))
+pd <- plot3Layers(dup) + xlim(c(-1.5,2.)) + ylim(c(-2,3.5)) + geom_text_repel(data=dup[wdup,,drop=FALSE], aes(label=gene)) + scale_colour_gradient2(low="blue", mid="lightgrey", high="red") + ggtitle("Dup")
+wwbs <- which(wbs$PValue.TE<0.01 & (wbs$translational | wbs$buffered))
+pw <- plot3Layers(wbs) + geom_text_repel(data=wbs[wwbs,,drop=FALSE], aes(label=gene)) + scale_colour_gradient2(low="blue", mid="lightgrey", high="red") + ggtitle("WBS") + xlim(c(-1.5,2.5))
+```
+
+```{r, fig.width=10, fig.height=9}
+h <- sechm(sem, degs, breaks=0.99, anno_columns=c("genotype","system"), gaps_at="Dataset", mark=union(wbs$gene[wwbs],dup$gene[wdup]), sortRowsOn=which(sem$Dataset!="TE"), do.scale=TRUE, sort.method="R2E", gaps_row="cluster2", use_raster=TRUE)
+pgo <- plot_grid(gofo + theme(legend.position="none") + ggtitle("Forwarded opposite"), 
+                          gobuf + theme(legend.position="none") + ggtitle("Buffered in DUP"), 
+                          nrow=2, labels=c("D","E")) 
+p <- plot_grid(pw + labs(size="-log10\nTE.pval"), pd + labs(size="-log10\nTE pval"),
+                grid.grabExpr(draw(h, merge_legends=TRUE)),
+                pgo, labels=c("A","B","C",""), nrow=2, rel_heights=c(3,6))
+p
+```
+
+
+
+# TOP
+
+```{r, fig.width=10, fig.height=3}
+rna <- toSymbol(readRDS("../clean/Neurons/RNA/Neurons.RNA.merged.DEA.rds"))
+prot <- toSymbol(readRDS("../clean/Neurons/Protein/Neurons.Protein.merged.DEA.rds"))
+rpf <- readRDS("../clean/Neurons/RPF/Neurons.RPF.isogenic.DEA.rds")
+te <- readRDS("../clean/Neurons/TE/Neurons.TE.isogenic.DEA.rds")
+top <- readLines("../extData/TOP.genes")
+
+layers <- list("RNA"=rna,"TE"=te,"RPF"=rpf, "Protein"=prot)
+conv <- c("other","TOP")
+names(conds) <- conds <- c("WBS","DUP")
+
+
+# pl <- unlist(lapply(conds, FUN=function(cond){
+#   lapply(names(layers), FUN=function(layer){
+#     x <- layers[[layer]]
+#     x$group <- conv[1+(row.names(x) %in% top)]
+#     p <- cdfplot(x[[paste("logFC",cond,sep=".")]], x$group, size=1.5) + xlim(-1,1) + 
+#       xlab(paste(layer,"logFC in", cond))
+#     if(layer=="Protein" & cond=="DUP"){
+#       p <- p + theme(legend.position=c(.65,.2))
+#     }else{
+#       p <- p + theme(legend.position="none")
+#     }
+#     p
+#   })
+# }), recursive=FALSE)
+# plot_grid(plotlist=pl, nrow=2)
+
+
+d <- dplyr::bind_rows(lapply(layers, FUN=function(x){
+  dplyr::bind_rows(lapply(conds, FUN=function(cond){
+    ll <- split(x[[paste("logFC",cond,sep=".")]], conv[1+(row.names(x) %in% top)])
+    dplyr::bind_rows(lapply(ll, FUN=function(x){
+      x <- x[!is.na(x) & !is.infinite(x)]
+      data.frame( y=seq_along(x)/length(x),
+                  logFC=sort(x) )
+    }), .id="Geneset")
+  }), .id="condition")
+}), .id="layer")
+d$condition <- factor(d$condition, names(conds))
+d$layer <- factor(d$layer, names(layers))
+p <- ggplot(d, aes(x,y,colour=Genesets)) +
+    geom_vline(xintercept=0, linetype="dashed") + geom_line()
+pcdf <- ggplot(d, aes(logFC, y, colour=Geneset)) + 
+    geom_vline(xintercept=0, linetype="dashed") + geom_line(size=1.3) + 
+  facet_grid(condition~layer) + xlim(-1,1) + ylab("Cumulative proportion")
+  
+pp <- plot_grid(pcdf, labels="F")
+pp
+ggsave("cdfs.pdf", pp, width=10, height=3)
+```
+

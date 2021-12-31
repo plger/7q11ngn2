@@ -1,0 +1,88 @@
+---
+title: "Staging"
+author: "Pierre-Luc Germain"
+date: "6/29/2019"
+output: html_document
+---
+
+```{r}
+suppressPackageStartupMessages({
+  library(SummarizedExperiment)
+  library(SingleCellExperiment)
+  library(muscat)
+  library(edgeR)
+  library(ComplexHeatmap)
+  library(sva)
+})
+source("../../colors.R")
+source("../../misc.R")
+se <- readRDS("../../clean/Neurons/RNA/Neurons.RNA.isogenic.SE.rds")
+row.names(se) <- rowData(se)$stable_gid
+se <- se[rowSums(assay(se)>10)>1,]
+
+sce <- readRDS("../../extData/MayerNeuron2019_human_fetal_neocortex.SCE.rds")
+pb <- aggregateData(sce, by=c("age.range", "cluster_id"), fun = "sum")
+ll <- do.call(cbind, assays(pb))
+df <- data.frame(cluster=rep(colnames(pb), length(assays(pb))), age=rep(assayNames(pb), each=ncol(pb)))
+colnames(ll) <- paste(df$cluster, df$age)
+pb <- SummarizedExperiment(ll, colData=df)
+pb <- pb[,colSums(assay(pb))>0]
+pb <- pb[rowSums(assay(pb)>2)>=1,]
+i <- intersect(row.names(se), row.names(pb))
+se <- se[i,]
+pb <- pb[i,]
+```
+
+```{r, fig.width=8, fig.height=10}
+cm <- stage(assays(se)$logcpm, log1p(cpm(calcNormFactors(DGEList(assay(pb))))))
+cm <- cm[order(row.names(cm)),]
+
+se1 <- SummarizedExperiment(assays=list(cor=cm), rowData=colData(pb)[row.names(cm),],
+                           colData=colData(se))
+
+
+h1 <- Heatmap(cm, name="Cor", cluster_rows=FALSE, cluster_columns=FALSE, column_title="Isogenic\n(correlation)",
+              left_annotation=rowAnnotation(age=colData(pb)[row.names(cm),"age"]) )
+h2 <- Heatmap( t(scale(t(cm))), name="zscore", cluster_rows=FALSE, cluster_columns=FALSE, 
+               column_title="Isogenic\n(z-scores)")
+h1 + h2
+```
+
+
+## Patient-derived
+
+```{r, fig.width=8, fig.height=10}
+se2 <- readRDS("../../clean/Neurons/RNA/Neurons.RNA.patientDerived.SE.rds")
+row.names(se2) <- rowData(se2)$stable_gid
+se2 <- se2[rowSums(assay(se2)>10)>1 & apply(assays(se2)$logcpm,1,FUN=sd)>0,]
+i2 <- intersect(i, row.names(se2))
+se2 <- se2[i2,]
+en <- assays(se2)$logcpm
+gen2 <- gsub("AtWBS", "WBS", se2$genotype)
+sv <- sva(en, model.matrix(~gen2))
+b <- (as.numeric(sv$sv) %*% t(en))
+bc <- en - t(as.matrix(sv$sv) %*% b)
+cm <- stage(bc, log1p(cpm(calcNormFactors(DGEList(assay(pb)[i2,])))))
+cm <- cm[order(row.names(cm)),]
+
+se2 <- SummarizedExperiment(assays=list(cor=cm[row.names(se1),]), rowData=colData(pb)[row.names(se1),],
+                           colData=colData(se2))
+
+h1b <- Heatmap(cm, name="Cor", cluster_rows=FALSE, cluster_columns=FALSE, column_title="Patient-derived\n(correlation)", )
+h2b <- Heatmap( t(scale(t(cm))), name="zscore", cluster_rows=FALSE, cluster_columns=FALSE, 
+               column_title="Patient-derived\n(z-scores)")
+h1b + h2b
+```
+
+```{r, fig.width=5, fig.height=6.5}
+sem <- mergeSEs(list("patient-derived"=se2, "isogenic"=se1), do.scale = FALSE)
+sem <- sem[order(-rowMeans(assay(sem))),]
+sem$Dataset <- factor(sem$Dataset, unique(sem$Dataset))
+levels(sem$genotype)[3:4] <- c("CTL","7Dup")
+h <- sechm(sem, grep("Unknown",row.names(sem),invert=TRUE,value=TRUE), assayName="cor", name="Pearson\ncorrelation",
+      gaps_at = "Dataset", sortRowsOn = NULL, cluster_rows = FALSE, anno_columns="genotype",
+      hmcols=viridisLite::viridis(100), anno_rows = "", row_names_gp = gpar(fontsize=10), use_raster=TRUE)
+pdf("staging.pdf", width=5, height=6.5)
+draw(h, merge_legends=TRUE)
+dev.off()
+```

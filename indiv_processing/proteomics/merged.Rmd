@@ -1,0 +1,167 @@
+---
+title: "Neurons Protein - merged"
+output:
+    html_document:
+        toc: true
+        toc_float: true
+        theme: 'cerulean'
+        highlight: 'tango'
+        code_folding: hide
+        df_print: paged
+---
+
+<style>
+  .main-container {
+    max-width: 1500px !important;
+  }
+</style>
+
+=====================
+Pierre-Luc Germain - `r format(Sys.time(), '%d %B, %Y')`
+<br><br><br>
+
+```{r}
+suppressPackageStartupMessages({
+  library(limma)
+  library(SummarizedExperiment)
+  library(SEtools)
+  library(cowplot)
+  library(ComplexHeatmap)
+})
+source("../../misc.R")
+source("../../colors.R")
+source("../../misc/enrichmentAnalysis.R")
+source("../../misc/volcanoDEGs.R")
+asd <- readRDS("../../extData/ID_ASD_genes.rds")
+asd$sfari <- unique(unlist(asd$sfari))
+```
+
+```{r}
+SEs <- list( isogenic=readRDS("../../clean/Neurons/Protein/Neurons.Protein.isogenic.SE.rds"),
+             patientDerived=readRDS("../../clean/Neurons/Protein/Neurons.Protein.patientDerived.SE.rds"))
+SEs <- lapply(SEs, toSymbol)
+SEs <- lapply(SEs, FUN=function(x){
+  SEtools::log2FC(x, fromAssay=head(intersect(c("corrected","imputed"),assayNames(x)),1), x$genotype=="CTRL", isLog=TRUE)
+})
+se <- SEtools::mergeSEs(SEs, commonOnly=FALSE, do.scale=FALSE)
+se$genotype <- relevel(se$genotype,"CTRL")
+rowData(se)$nbProts <- lengths(strsplit(row.names(se),",",fixed=TRUE))
+rowData(se)$nbNAs <- nbNAs <- rowSums(is.na(assays(se)$lognorm))
+se2 <- se[nbNAs<=2,]
+se2 <- svacor(se2, ~Dataset+genotype, ~Dataset, assayName="imputed", useVST=FALSE)
+se2 <- SEtools::log2FC(se2, fromAssay="corrected", se2$genotype=="CTRL", by=se2$Dataset, isLog=TRUE)
+assays(se)$log2FC[row.names(se2),] <- assays(se2)$log2FC
+svs <- grep("^SV[0-9]$",colnames(colData(se2)), value=TRUE)
+for(sv in svs) se[[sv]] <- se2[[sv]]
+
+se$system <- se$Dataset
+se$genotype <- factor(se$genotype, c("WBS","AtWBS","CTRL","DUP"))
+se <- se[,order(se$system, se$genotype)]
+saveRDS(se, file="../../clean/Neurons/Protein/Neurons.Protein.merged.SE.rds")
+
+se <- se[!grepl("^NA\\.",row.names(se)) & rowData(se)$nbProts <= 5, ]
+sechm::sechm(se, grep(paste(WBSg1,collapse="|"),row.names(se),value=TRUE), do.scale=FALSE, assayName="log2FC", , sortRowsOn=NULL, cluster_rows=FALSE, breaks=0.985)
+
+se2 <- se[,se$genotype!="AtWBS"]
+se2$genotype <- relevel(droplevels(se2$genotype),"CTRL")
+
+f <- as.formula(paste0("~Dataset+", paste(svs, collapse="+"), "+CN"))
+fit <- eBayes(lmFit(assays(se2)$imputed, model.matrix(f, data=colData(se2))))
+reg <- homogenizeDEAresults(topTable(fit, coef = "CN", Inf))
+
+f <- as.formula(paste0("~Dataset+", paste(svs, collapse="+"), "+genotype"))
+se2$genotype <- relevel(se2$genotype,"CTRL")
+fit <- eBayes(lmFit(assay(se2), model.matrix(f, data=colData(se2))))
+wbs <- homogenizeDEAresults(topTable(fit, coef = "genotypeWBS", Inf))
+dup <- homogenizeDEAresults(topTable(fit, coef = "genotypeDUP", Inf))
+
+se2$genotype <- relevel(droplevels(se2$genotype), "WBS")
+fit <- eBayes(lmFit(assay(se2), model.matrix(f, data=colData(se2))))
+dvw <- homogenizeDEAresults(topTable(fit, "genotypeDUP", Inf))
+
+# se2$diseased <- as.factor(c("CTRL","Diseased")[1+(se2$genotype!="CTRL")])
+# f <- as.formula(paste0("~Dataset+", paste(svs, collapse="+"), "+diseased"))
+# fit <- eBayes(lmFit(assay(se2), model.matrix(f, data=colData(se2))))
+# dis <- homogenizeDEAresults(topTable(fit, coef = "diseasedDiseased", Inf))
+
+m <- cbindDEAs(list(reg=reg, WBS=wbs, DUP=dup, DUPvsWBS=dvw))
+
+volcanoDEGs(dvw, main="DUP vs WBS",maxdot=20,lfc=log2(1.25), alpha = 0.2)
+
+m$nbNAs <- rowSums(is.na(assays(se)$lognorm[row.names(m),]))
+saveRDS(m, file="../../clean/Neurons/Protein/Neurons.Protein.merged.DEA.rds")
+
+degs <- getDEGs.any(m[m$nbNAs<5,], log2(1.25),FDR.thres=0.25)
+sechm(se, degs, assayName="log2FC", do.scale=FALSE, gaps_at="Dataset", row_title="Merged DEGs")
+
+ea <- runAllEA(m, addSets=asd, dea.thres=0.25)
+saveRDS(ea, file="../../clean/Neurons/Protein/Neurons.Protein.merged.DEA.enrichments.rds")
+```
+
+## Regression on copy-number
+
+```{r}
+volcanoDEGs(r.cn, main="Regression on copy-number",maxdot=20,lfc=log2(1.3))
+clusterGO(ea$reg$goseq, k=9) + ggtitle("Regression on copy-number")
+```
+
+## WBS
+
+```{r}
+volcanoDEGs(r.wbs, main="WBS",maxdot=20,lfc=log2(1.3))
+#clusterGO(ea$WBS$goseq, k=6) + ggtitle("WBS")
+```
+
+## DUP
+`
+```{r}
+volcanoDEGs(r.dup, main="DUP",maxdot=20,lfc=log2(1.3))
+clusterGO(ea$DUP$goseq, k=6) + ggtitle("DUP")
+```
+
+
+```{r, include=FALSE}
+m <- readRDS(file="../../clean/Neurons/Protein/Neurons.Protein.merged.DEA.rds")
+se <- readRDS(file="../../clean/Neurons/Protein/Neurons.Protein.merged.SE.rds")
+```
+
+## Isogenic DEGs
+
+```{r}
+deas <- list(iso="../../clean/Neurons/Protein/Neurons.Protein.isogenic.DEA.rds",
+             pd="../../clean/Neurons/Protein/Neurons.Protein.patientDerived.DEA.rds")
+deas <- lapply(deas, FUN=readRDS)
+deas <- lapply(deas, FUN=toSymbol)
+sep.degs <- list(iso=getDEGs.any(deas$iso, log2(1.25), 0.05),
+                 pd=getDEGs.any(deas$pd, log2(1.25), 0.4))
+se$condition <- NULL
+sechm(se, sep.degs$iso, assayName="log2FC", do.scale=FALSE, gaps_at="Dataset", row_title="Isogenic DEGs", breaks=0.985)
+```
+
+## Merged DEGs
+
+```{r}
+degs <- getDEGs.any(m, log2(1.1), FDR.thres=0.2)
+sechm(se, degs, assayName="log2FC", do.scale=FALSE, gaps_at="Dataset", row_title="Merged DEGs", breaks=0.985)
+```
+
+# Transcriptomic DEGs
+
+```{r}
+rna.se <- toSymbol(readRDS("../../clean/Neurons/RNA/Neurons.RNA.merged.SE.rds"))
+rna.dea <- toSymbol(readRDS("../../clean/Neurons/RNA/Neurons.RNA.merged.DEA.rds"))
+degs.rna <- getDEGs.any(rna.dea, log2(1.25), FDR.thres=0.01)
+degs <- getDEGs.any(m, log2(1.1), FDR.thres=0.2)
+
+rna.se$genotype <- factor(rna.se$genotype, c("WBS","AtWBS","CTRL","DUP"))
+rna.se <- rna.se[,order(rna.se$genotype)]
+se$genotype <- factor(se$genotype, c("WBS","AtWBS","CTRL","DUP"))
+se <- se[,order(se$genotype)]
+rna.se$system <- rna.se$Dataset
+se$system <- se$Dataset
+
+ac <- c(annoColors(), list(system=c("isogenic"="#4477AA", patientDerived="#CC6677")))
+crossHm(list(RNA=rna.se, Protein=se), intersect(row.names(se[rowData(se)$nbNAs<=5,]),c(degs)), assayName="log2FC", do.scale=FALSE, breaks=0.99, anno_columns=c("genotype","system"), row_title="Protein DEGs", anno_colors=ac)
+crossHm(list(RNA=rna.se, Protein=se), intersect(row.names(se[rowData(se)$nbNAs<=5,]),c(degs.rna, degs)), assayName="log2FC", do.scale=FALSE, breaks=0.99, anno_columns=c("genotype","system"), row_title="Union of RNA and Protein DEGs", anno_colors=ac)
+```
+

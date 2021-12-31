@@ -1,0 +1,289 @@
+---
+title: "7q11.23 translation project - neuron merged RNAseq analysis"
+output:
+    html_document:
+        toc: true
+        toc_float: true
+        theme: 'cerulean'
+        highlight: 'tango'
+        code_folding: hide
+        df_print: paged
+---
+
+<style>
+  .main-container {
+    max-width: 1500px !important;
+  }
+</style>
+
+=====================
+Pierre-Luc Germain - `r format(Sys.time(), '%d %B, %Y')`
+<br><br><br>
+
+
+
+```{r}
+suppressPackageStartupMessages(library(GTscripts))
+suppressPackageStartupMessages(library(DESeq2))
+suppressPackageStartupMessages(library(plotly))
+suppressPackageStartupMessages(library(DT))
+source("../../misc.R")
+source("../../misc/volcanoDEGs.R")
+source("../../misc/GO.R")
+printGoTable <- function(x, withGenes=FALSE, pl=6){
+  if(!withGenes) x$genes <- NULL
+  datatable(x, filter="top", options=list(pageLength=pl))
+}
+```
+
+```{r}
+load("isogenic_DEAs.RData")
+iso <- m
+load("DEA.RData")
+pat <- m
+i <- intersect(row.names(iso),row.names(pat))
+iso <- iso[i,]
+pat <- pat[i,]
+pat.o <- pat
+iso.o <- iso
+```
+
+```{r}
+plot_nDEGs_by_threshold(list(isogenic=iso, patients=pat),ylim=c(0,3000), main="Overlap of DEGs - regression on copy-number")
+```
+```{r}
+plot_nDEGs_by_threshold(list(isogenic=subset_mDEA(iso,"GTF2I"), patients=pat),ylim=c(0,3000), main="Overlap of DEGs - regression on copy-number and regression on GTF2I")
+```
+
+<br/><br/>
+
+# Regression on copy-number
+```{r}
+g <- i[which(iso[,"FDR"]<0.01)]
+LSD::heatscatter(iso[g,"logFC"],pat[g,"logFC"],xlab="logFC per WBSCR copy in isogenic lines", ylab="logFC in patient-derived lines", main="FDR<0.01 in isogenic regression on copynumber")
+abline(h=0,lty="dashed");abline(v=0,lty="dashed") 
+legend("topleft",bty="n",legend=paste0(c("cor=","p~"),c(round(cor(iso[g,"logFC"],pat[g,"logFC"]),2),format(cor.test(iso[g,"logFC"],pat[g,"logFC"])$p.value,digits=2))))
+abline(a=0,b=1,col="red")
+```
+
+```{r, fig.width=10, fig.height=8}
+g <- row.names(pat)[which(pat$PValue<0.01 & iso$FDR<0.05)]
+p <- plot_ly(x=iso[g,"logFC"],y=pat[g,"logFC"],type="scatter",mode="markers",hoverinfo="text",hovertext=g)
+p %>% layout(title = 'Genes with FDR<0.05 in isogenic and p<0.01 in patient-derived lines', 
+               xaxis=list(title="logFC per WBSCR copy in isogenic lines"),
+               yaxis=list(title="logFC in patient-derived lines"))
+```
+
+We keep only those changing in the same direction:
+
+```{r, fig.width=8, fig.height=7}
+m <- mergeDEAs(iso, pat)
+gs <- g[which(sign(iso[g,"logFC"])==sign(pat[g,"logFC"]))]
+go <- goseq.enrichment(i, gs, gotype = "GO:BP")
+plotEnrichmentFC(iso,go)
+printGoTable(go)
+```
+
+## Downregulated:
+
+```{r}
+down <- g[which(sign(iso[g,"logFC"])<0 & sign(pat[g,"logFC"])<0)]
+up <- g[which(sign(iso[g,"logFC"])>0 & sign(pat[g,"logFC"])>0)]
+go.down <- goseq.enrichment(i, down, gotype = "GO:BP")
+printGoTable(go.down)
+```
+
+## Upregulated:
+
+```{r}
+go.up <- goseq.enrichment(i, up, gotype = "GO:BP")
+printGoTable(go.up)
+goTreemap(go.up[which(go.up$FDR<0.05),],title="Conserved DEGs upregulated upon copy-number increase")
+```
+
+```{r}
+dgs <- list(CN.up=up,CN.down=down)
+mm <- cbind(iso,pat)
+colnames(mm) <- paste(rep(c("iso","pat"),c(ncol(iso),ncol(pat))),c(colnames(iso),colnames(pat)),sep=".")
+mm$agg.pval <- 1
+w <- which(sign(mm$pat.logFC)==sign(mm$iso.logFC))
+mm$logFC <- rowMeans(cbind(iso$logFC,pat$logFC))
+mm$agg.pval[w] <- apply(cbind(iso$PValue[w],pat$PValue[w]),1,FUN=aggregation::fisher)
+mm$FDR <- p.adjust(mm$agg.pval,method="fdr")
+mm <- mm[order(mm$FDR),]
+save(mm, file="DEA.mergedWithIso.RData")
+mm$PValue <- mm$agg.pval
+datatable(cameraWrapper(mm), filter="top")
+```
+
+<br/><br/>
+
+## Regression on GTF2I (in isogenic lines) vs regression on copy-number (in patient-derived)
+```{r}
+iso2 <- subset_mDEA(iso,"GTF2I")
+LSD::heatscatter(iso2[,"logFC"],pat[,"logFC"],xlab="logFC upon GTF2I change in isogenic lines", ylab="logFC in patient-derived lines", main="isogenic regression on GTF2I vs patient-derived regression on copynumber")
+abline(h=0,lty="dashed");abline(v=0,lty="dashed") 
+legend("topleft",bty="n",legend=paste0(c("cor=","p~"),c(round(cor(iso[g,"logFC"],pat[g,"logFC"]),2),format(cor.test(iso[g,"logFC"],pat[g,"logFC"])$p.value,digits=2))))
+abline(a=0,b=1,col="red")
+```
+
+In general, there is little relationship between the regression on GTF2I in isogenic lines and the regression on WBSCR copy-number in patient-derived lines. We look specifically at DEGs in both:
+
+```{r, fig.width=10, fig.height=8}
+g <- row.names(pat)[which(pat$PValue<0.01 & iso2$FDR<0.05)]
+wU <- which(iso2[g,"logFC"]>0)
+dgs <- list(GTF2I.up=g[wU], GTF2I.down=g[!wU])
+p <- plot_ly(x=iso2[g,"logFC"],y=pat[g,"logFC"],type="scatter",mode="markers",hoverinfo="text",hovertext=g)
+p %>% layout(title = 'Genes with FDR<0.05 in isogenic and p<0.01 in patient-derived lines', 
+               xaxis=list(title="logFC per GTF2I change in isogenic lines"),
+               yaxis=list(title="logFC in patient-derived lines"))
+```
+
+Part of this is because large effects in WBS make it in the regression on copy-number, so we'll exclude what was in the same direction when comparing the regressions on copy-number:
+
+```{r, fig.width=10, fig.height=8}
+g <- setdiff(g, gs)
+p <- plot_ly(x=iso2[g,"logFC"],y=pat[g,"logFC"],type="scatter",mode="markers",hoverinfo="text",hovertext=g)
+p %>% layout(title = 'Genes with FDR<0.05 in isogenic and p<0.01 in patient-derived lines', 
+               xaxis=list(title="logFC per GTF2I change in isogenic lines"),
+               yaxis=list(title="logFC in patient-derived lines"))
+```
+
+Still, a negative correlation (gene positively associated to GTF2I in isogenic lines tend to be negatively associated to the whole CNV in patient-derived lines, and vice versa), which is difficult to interpret...
+
+### Does GTF2I explain the discrepancies of the comparison between the two regressions based on copy-number?
+```{r, fig.width=10, fig.height=8}
+# same direction GTF2I & patient-derived:
+g <- row.names(pat)[which(pat$PValue<0.01 & iso2$FDR<0.05)]
+gt <- g[which(sign(iso2[g,"logFC"])==sign(pat[g,"logFC"]))]
+g <- row.names(pat)[which(pat$PValue<0.01 & iso$FDR<0.05)]
+logFC.in.GTF2I <- iso2[g,"logFC"]
+GTF2I.ass <- as.factor(!(g %in% gt))
+levels(GTF2I.ass) <- c("associated to GTF2I", "n.sig.")
+
+p <- plot_ly(x=iso[g,"logFC"],y=pat[g,"logFC"],type="scatter",mode="markers",hoverinfo="text",hovertext=g,
+             color=logFC.in.GTF2I, symbol=GTF2I.ass)
+p %>% layout(title = 'Genes with FDR<0.05 in isogenic and p<0.01 in patient-derived lines', 
+               xaxis=list(title="logFC per WBSCR copy in isogenic lines"),
+               yaxis=list(title="logFC in patient-derived lines")
+            ) %>%
+      colorbar(title="logFC.by.GTF2I")
+```
+
+<br/><br/>
+
+# WBS vs CTRL
+
+```{r}
+iso.dup <- subset_mDEA(iso,"dup")
+iso <- subset_mDEA(iso,"wbs")
+pat.dup <- subset_mDEA(pat,"dup")
+pat <- subset_mDEA(pat,"wbs")
+```
+
+```{r, fig.width=8, fig.height=8}
+g <- intersect(i,c(degs$WBS.down,degs$WBS.up))
+LSD::heatscatter(iso[g,"logFC"],pat[g,"logFC"],xlab="logFC in isogenic lines", ylab="logFC in patient-derived lines", main="DEGs in isogenic - WBS vs CTRL")
+abline(h=0,lty="dashed");abline(v=0,lty="dashed") 
+legend("topleft",bty="n",legend=paste0(c("cor=","p~"),c(round(cor(iso[g,"logFC"],pat[g,"logFC"]),2),format(cor.test(iso[g,"logFC"],pat[g,"logFC"])$p.value,digits=2))))
+abline(a=0,b=1,col="red")
+```
+
+```{r, fig.width=10, fig.height=8}
+g <- row.names(pat)[which(pat$PValue<0.05 & iso$FDR<0.05)]
+p <- plot_ly(x=iso[g,"logFC"],y=pat[g,"logFC"],type="scatter",mode="markers",hoverinfo="text",hovertext=g)
+p %>% layout(title = 'Genes with FDR<0.05 in isogenic and p<0.05 in patient-derived lines (WBS vs CTRL)', 
+               xaxis=list(title="logFC in isogenic lines"),
+               yaxis=list(title="logFC in patient-derived lines"))
+```
+
+
+```{r, fig.width=8, fig.height=7}
+gs <- g[which(sign(iso[g,"logFC"])==sign(pat[g,"logFC"]))]
+go <- goseq.enrichment(i, gs, gotype = "GO:BP")
+plotEnrichmentFC(iso,go)
+printGoTable(go)
+```
+
+## Downregulated:
+
+```{r}
+down <- g[which(sign(iso[g,"logFC"])<0 & sign(pat[g,"logFC"])<0)]
+up <- g[which(sign(iso[g,"logFC"])>0 & sign(pat[g,"logFC"])>0)]
+dgs$WBS.up <- up
+dgs$WBS.down <- down
+go.down <- goseq.enrichment(i, down, gotype = "GO:BP")
+goTreemap(go.down[which(go.down$FDR<0.05),],title="Conserved DEGs downregulated in WBS vs CTRL")
+printGoTable(go.down)
+```
+
+## Upregulated:
+
+```{r}
+go.up <- goseq.enrichment(i, up, gotype = "GO:BP")
+go.up
+```
+
+
+<br/><br/>
+
+# DUP vs CTRL
+
+```{r}
+iso <- iso.dup
+pat <- pat.dup
+```
+
+```{r, fig.width=8, fig.height=8}
+g <- intersect(i,c(degs$DUP.down,degs$DUP.up))
+LSD::heatscatter(iso[g,"logFC"],pat[g,"logFC"],xlab="logFC in isogenic lines", ylab="logFC in patient-derived lines", main="DEGs in isogenic - WBS vs CTRL")
+abline(h=0,lty="dashed");abline(v=0,lty="dashed") 
+legend("topleft",bty="n",legend=paste0(c("cor=","p~"),c(round(cor(iso[g,"logFC"],pat[g,"logFC"]),2),format(cor.test(iso[g,"logFC"],pat[g,"logFC"])$p.value,digits=2))))
+abline(a=0,b=1,col="red")
+```
+
+```{r, fig.width=10, fig.height=8}
+g <- row.names(pat)[which(pat$PValue<0.05 & iso$FDR<0.05)]
+p <- plot_ly(x=iso[g,"logFC"],y=pat[g,"logFC"],type="scatter",mode="markers",hoverinfo="text",hovertext=g)
+p %>% layout(title = 'Genes with FDR<0.05 in isogenic and p<0.05 in patient-derived lines (WBS vs CTRL)', 
+               xaxis=list(title="logFC in isogenic lines"),
+               yaxis=list(title="logFC in patient-derived lines"))
+```
+
+We keep only those changing in the same direction:
+
+```{r, fig.width=8, fig.height=7}
+gs <- g[which(sign(iso[g,"logFC"])==sign(pat[g,"logFC"]))]
+go <- goseq.enrichment(i, gs, gotype = "GO:BP")
+go
+```
+
+## Downregulated:
+
+```{r}
+down <- g[which(sign(iso[g,"logFC"])<0 & sign(pat[g,"logFC"])<0)]
+up <- g[which(sign(iso[g,"logFC"])>0 & sign(pat[g,"logFC"])>0)]
+dgs$DUP.up <- up
+dgs$DUP.down <- down
+go.down <- goseq.enrichment(i, down, gotype = "GO:BP")
+go.down
+```
+
+## Upregulated:
+
+```{r}
+go.up <- goseq.enrichment(i, up, gotype = "GO:BP")
+go.up
+```
+
+
+
+<br/><br/>
+
+
+# Overlap with ASD genes:
+```{r, fig.width=8, fig.height=7}
+save(dgs,file="merged_degs.RData")
+load("../../extData/ID_ASD_genes.RData")
+multintersect(dgs,gl,i)
+```

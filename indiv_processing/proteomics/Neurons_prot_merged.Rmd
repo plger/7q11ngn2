@@ -1,0 +1,259 @@
+---
+title: "7q11.23 translation project - neuron merged proteomics"
+output:
+    html_document:
+        toc: true
+        toc_float: true
+        theme: 'cerulean'
+        highlight: 'tango'
+        code_folding: hide
+        df_print: paged
+---
+
+<style>
+  .main-container {
+    max-width: 1500px !important;
+  }
+</style>
+
+=====================
+Pierre-Luc Germain - `r format(Sys.time(), '%d %B, %Y')`
+<br><br><br>
+
+
+
+```{r}
+suppressPackageStartupMessages(library(DESeq2))
+suppressPackageStartupMessages(library(plotly))
+suppressPackageStartupMessages(library(DT))
+source("../../misc.R")
+source("../../misc/volcanoDEGs.R")
+source("../../GO.R")
+printGoTable <- function(x, withGenes=TRUE, pl=6){
+  if(!withGenes) x$genes <- NULL
+  datatable(x, filter="top", options=list(pageLength=pl))
+}
+```
+
+# Comparison at the gene-level
+
+```{r}
+load("isogenics.geneLevel.RData")
+iso <- m
+load("patientDerived.geneLevel.RData")
+pat <- m
+
+cat(paste0("
+Patient-derived dataset (SWATH):
+  Total number of features tested: ",nrow(pat),"
+  Of these, ",sum(!grepl("; ",row.names(pat)))," can be assigned to a unique gene.
+Isogenic dataset:
+  Total number of features tested: ",nrow(iso),"
+  Of these, ",sum(!grepl("; ",row.names(iso)))," can be assigned to a unique gene.
+"))
+```
+
+If we concentrate only on the unique genes:
+
+```{r, fig.width=4, fig.height=4}
+library(eulerr)
+ll <- list(iso=row.names(iso), patient=row.names(pat)[!grepl("; ",row.names(pat))])
+plot(euler(ll), labels=list(font=4, cex=2), quantities=T)
+```
+
+## Genes only detected in SWATH:
+```{r}
+bg <- unique(unlist(ll))
+go1 <- go.enrichment(bg, setdiff(ll$pat, ll$iso))
+lapply(go1, FUN=function(x){ x[1:min(nrow(x),10),c(2,4,5,7)] })
+```
+
+## Genes only detected in MS:
+```{r}
+bg <- unique(unlist(ll))
+go2 <- go.enrichment(bg, setdiff(ll$iso, ll$pat))
+lapply(go2, FUN=function(x){ x[1:min(nrow(x),10),c(2,4,5,7)] })
+```
+
+## Cellular compartments
+
+Number of detected genes per (manually-selected) cellular compartments, based on GO annotation:
+
+```{r}
+cc <- read.csv("go_cc.csv",header=F,row.names = 1)
+
+getGOgenes <- function(go_ids, species="Mm", translate.ids=TRUE){
+  library(AnnotationDbi)
+  if(!all(grepl("^GO:",go_ids)) && !is.null(names(go_ids))) go_ids <- names(go_ids)
+  db <- paste0('org.',species,'.eg')
+  library(package=paste0(db,'.db'), character.only = T)
+  eg <- mget(as.character(go_ids), get(paste0(db,'GO2ALLEGS')), ifnotfound=NA)
+  x <- lapply(eg, FUN=function(x){ 
+    x <- x[which(!is.na(x))]
+    if(length(x)==0) return(c())
+    unique(as.character(unlist(mget(as.character(x), get(paste0(db,'SYMBOL'))))))
+  })
+  x <- x[which(sapply(x,length)>0)]
+  if(translate.ids) names(x) <- Term(names(x))
+  x
+}
+ccg <- getGOgenes(as.character(cc$V2),"Hs")
+
+cc.ov <- data.frame( compartment=rep(names(ccg),2),
+                     dataset=rep(c("iso","pat"),each=length(ccg)),
+                     genes=c( sapply(ccg,y=row.names(iso),FUN=function(x,y){ length(intersect(x,y)) }),
+                              sapply(ccg,y=row.names(pat),FUN=function(x,y){ length(intersect(x,y)) }) ) )
+
+library(cowplot)
+ggplot( cc.ov, aes(x=compartment, y=genes, fill=dataset)) +
+geom_bar(stat="identity", position=position_dodge()) + coord_flip() +theme_cowplot()
+```
+
+<br/><br/>
+
+# Comparison of the differential expression
+
+```{r}
+i <- intersect(row.names(iso),row.names(pat))
+iso <- iso[i,]
+pat <- pat[i,]
+pat.o <- pat
+iso.o <- iso
+m <- mergeDEAs(iso,pat)
+write.table(m, file="neurons_prot_merged.tab", col.names = T, row.names = T, sep="\t", quote=F)
+plot_nDEGs_by_threshold(list(isogenic=iso, patients=pat),main="Overlap of DEGs - regression on copy-number")
+```
+
+<br/><br/>
+
+# Regression on copy-number
+```{r}
+g <- i[which(iso[,"FDR"]<0.2)]
+LSD::heatscatter(iso[g,"logFC"],pat[g,"logFC"],xlab="logFC per WBSCR copy in isogenic lines", ylab="logFC in patient-derived lines", main="FDR<0.2 in isogenic regression on copynumber")
+abline(h=0,lty="dashed");abline(v=0,lty="dashed") 
+legend("topleft",bty="n",legend=paste0(c("cor=","p~"),c(round(cor(iso[g,"logFC"],pat[g,"logFC"]),2),format(cor.test(iso[g,"logFC"],pat[g,"logFC"])$p.value,digits=2))))
+abline(a=0,b=1,col="red")
+```
+
+```{r, fig.width=10, fig.height=8}
+g <- row.names(pat)[which(pat$PValue<0.05 & iso$FDR<0.2)]
+p <- plot_ly(x=iso[g,"logFC"],y=pat[g,"logFC"],type="scatter",mode="markers",hoverinfo="text",hovertext=g)
+p %>% layout(title = 'Genes with FDR<0.2 in isogenic and p<0.05 in patient-derived lines', 
+               xaxis=list(title="logFC per WBSCR copy in isogenic lines"),
+               yaxis=list(title="logFC in patient-derived lines"))
+```
+
+We keep only those changing in the same direction:
+
+```{r, fig.width=8, fig.height=7}
+gs <- g[which(sign(iso[g,"logFC"])==sign(pat[g,"logFC"]))]
+go <- go.enrichment(i, gs, gotype = "GO:BP")
+#plotEnrichmentFC(iso,go)
+printGoTable(go)
+```
+
+## Downregulated:
+
+```{r}
+down <- g[which(sign(iso[g,"logFC"])<0 & sign(pat[g,"logFC"])<0)]
+up <- g[which(sign(iso[g,"logFC"])>0 & sign(pat[g,"logFC"])>0)]
+go.down <- go.enrichment(i, down, gotype = "GO:BP")
+printGoTable(go.down)
+```
+
+## Upregulated:
+
+```{r}
+go.up <- go.enrichment(i, up, gotype = "GO:BP")
+printGoTable(go.up)
+goTreemap(go.up,title="Conserved DEGs upregulated upon copy-number increase")
+```
+
+```{r}
+dgs <- list(CN.up=up,CN.down=down)
+
+mm <- cbind(iso,pat)
+colnames(mm) <- paste(rep(c("iso","pat"),c(ncol(iso),ncol(pat))),c(colnames(iso),colnames(pat)),sep=".")
+mm$agg.pval <- 1
+w <- which(sign(mm$pat.logFC)==sign(mm$iso.logFC))
+mm$logFC <- rowMeans(cbind(iso$logFC,pat$logFC))
+mm$agg.pval[w] <- apply(cbind(iso$PValue[w],pat$PValue[w]),1,FUN=aggregation::fisher)
+mm$FDR <- p.adjust(mm$agg.pval,method="fdr")
+mm <- mm[order(mm$FDR),]
+save(mm, file="merged.DEA.RData")
+mm$PValue <- mm$agg.pval
+datatable(cameraWrapper(mm), filter="top")
+```
+
+<br/><br/>
+
+# WBS vs CTRL
+
+```{r}
+iso.dup <- subset_mDEA(iso,"dup")
+iso <- subset_mDEA(iso,"wbs")
+pat.dup <- subset_mDEA(pat,"dup")
+pat <- subset_mDEA(pat,"wbs")
+```
+
+```{r, fig.width=8, fig.height=8}
+g <- i[which(iso[,"FDR"]<0.1)]
+LSD::heatscatter(iso[g,"logFC"],pat[g,"logFC"],xlab="logFC in isogenic lines", ylab="logFC in patient-derived lines", main="DEGs in isogenic - WBS vs CTRL")
+abline(h=0,lty="dashed");abline(v=0,lty="dashed") 
+legend("topleft",bty="n",legend=paste0(c("cor=","p~"),c(round(cor(iso[g,"logFC"],pat[g,"logFC"]),2),format(cor.test(iso[g,"logFC"],pat[g,"logFC"])$p.value,digits=2))))
+abline(a=0,b=1,col="red")
+```
+
+```{r, fig.width=10, fig.height=8}
+g <- row.names(pat)[which(pat$PValue<0.05 & iso$FDR<0.1)]
+p <- plot_ly(x=iso[g,"logFC"],y=pat[g,"logFC"],type="scatter",mode="markers",hoverinfo="text",hovertext=g)
+p %>% layout(title = 'Genes with FDR<0.1 in isogenic and p<0.05 in patient-derived lines (WBS vs CTRL)', 
+               xaxis=list(title="logFC in isogenic lines"),
+               yaxis=list(title="logFC in patient-derived lines"))
+```
+
+
+
+<br/><br/>
+
+# DUP vs CTRL
+
+```{r}
+iso <- iso.dup
+pat <- pat.dup
+```
+
+```{r, fig.width=8, fig.height=8}
+g <- i[which(iso[,"FDR"]<0.1)]
+LSD::heatscatter(iso[g,"logFC"],pat[g,"logFC"],xlab="logFC in isogenic lines", ylab="logFC in patient-derived lines", main="DEGs in isogenic - WBS vs CTRL")
+abline(h=0,lty="dashed");abline(v=0,lty="dashed") 
+legend("topleft",bty="n",legend=paste0(c("cor=","p~"),c(round(cor(iso[g,"logFC"],pat[g,"logFC"]),2),format(cor.test(iso[g,"logFC"],pat[g,"logFC"])$p.value,digits=2))))
+abline(a=0,b=1,col="red")
+```
+
+```{r, fig.width=10, fig.height=8}
+g <- row.names(pat)[which(pat$PValue<0.05 & iso$FDR<0.1)]
+p <- plot_ly(x=iso[g,"logFC"],y=pat[g,"logFC"],type="scatter",mode="markers",hoverinfo="text",hovertext=g)
+p %>% layout(title = 'Genes with FDR<0.1 in isogenic and p<0.05 in patient-derived lines (WBS vs CTRL)', 
+               xaxis=list(title="logFC in isogenic lines"),
+               yaxis=list(title="logFC in patient-derived lines"))
+```
+
+We keep only those changing in the same direction:
+
+```{r, fig.width=8, fig.height=7}
+gs <- g[which(sign(iso[g,"logFC"])==sign(pat[g,"logFC"]))]
+go <- go.enrichment(i, gs, gotype = "GO:BP")
+printGoTable(go)
+```
+
+<br/><br/>
+
+
+# Overlap with ASD genes:
+```{r, fig.width=8, fig.height=7}
+save(dgs,file="merged_degs.RData")
+load("../../extData/ID_ASD_genes.RData")
+multintersect(dgs,gl,i)
+lapply(dgs,y=gl$EichlerList,FUN=intersect)
+```

@@ -1,0 +1,241 @@
+---
+title: "7q11.23 translation project - isogenic Neurons proteomics"
+output:
+    html_document:
+        toc: true
+        toc_float: true
+        theme: 'cerulean'
+        highlight: 'tango'
+        code_folding: hide
+        df_print: paged
+---
+
+=====================
+Pierre-Luc Germain - `r format(Sys.time(), '%d %B, %Y')`
+<br><br><br>
+
+# Preprocessing
+
+```{r}
+suppressPackageStartupMessages({
+  library(SummarizedExperiment)
+  library(DT)
+  library(SEtools)
+  library(limma)
+})
+printTable <- function(x){
+  datatable(x, filter="top", extensions = 'Buttons', 
+            options = list(
+              dom = 'Bfrtip',
+              buttons = c('csv', 'excel')
+            ))
+}
+source("../../misc.R")
+source("../../misc/enrichmentAnalysis.R")
+source("../../misc/volcanoDEGs.R")
+```
+
+```{r, eval=FALSE}
+library(DEP)
+e <- read.delim("E1712151600_matrix.csv.gz", header=T, stringsAsFactors = F)
+ss <- read.delim("E1712151600_samples.csv", header=T, stringsAsFactors = F, row.names = 1)
+ss$sample <- gsub("_rep1|_rep2", "", ss$Biological.Sample)
+ss$sample <- gsub("Neuro_f22_","S",ss$sample)
+ss$sample <- gsub("-","_",ss$sample)
+
+e2 <- sapply(row.names(ss), FUN=function(x){
+  si <- e[,grep(paste0("^Intensity_",x,"_"),colnames(e))]
+  si[which(e[,grep(paste0("^score_",x,"_"),colnames(e))]>0.01)] <- NA
+  si
+})
+ag <- sapply(split(1:nrow(ss), ss$sample), FUN=function(x){ 
+  rowMeans(e2[,x,drop=FALSE], na.rm=TRUE)
+})
+
+nbNAs <- apply(ag,1,FUN=function(x){ sum(is.na(x)) })
+w <- which(nbNAs < floor(ncol(ag)/2))
+
+ag <- ag[w,]
+pp <- e$Protein[w]
+pp <- sapply(strsplit(pp,"/",fixed=T),FUN=function(x){
+  if(!is.na(as.numeric(x[[1]]))) x <- x[-1]
+  x <- sort(unique(x))
+  paste(length(x),paste(x,collapse="/"),sep="/")
+})
+e2 <- t(sapply(unique(pp),FUN=function(p){
+  x <- ag[which(pp==p),,drop=F]
+  c(apply(x[order(rowMeans(x),decreasing=T)[1:min(3,nrow(x))],,drop=F],2,na.rm=T,FUN=median),nrow(x))
+}))
+colnames(e2)[ncol(e2)] <- "nbPeptides"
+e2 <- as.data.frame(e2)
+
+# fetch gene names from biomart
+library(biomaRt)
+ensembl = useMart("ensembl", dataset="hsapiens_gene_ensembl")
+pids <- unique(unlist(lapply(strsplit(as.character(row.names(e2)),"/"), FUN=function(x){
+  if(!is.na(as.numeric(x[[1]]))) x <- x[-1]
+  x
+})))
+bm <- getBM(attributes=c("uniprotswissprot","hgnc_symbol","ensembl_gene_id"), filters="uniprotswissprot", values=pids, mart=ensembl)
+bm2 <- plag(bm,by=bm$uniprotswissprot,agFun=function(x){ x <- x[x!=""]; paste(sort(unique(x)),collapse="; ")})
+e2$Gene.names <- sapply(strsplit(row.names(e2),"/",fixed=T), FUN=function(x){
+  if(!is.na(as.numeric(x[[1]]))) x <- x[-1]
+  xo <- x
+  x <- bm2[x,"hgnc_symbol"]
+  x <- x[!is.na(x) & x!=""]
+  if(length(x)==0){
+    x <- xo
+    x <- bm2[x,"ensembl_gene_id"]
+    x <- x[!is.na(x) & x!=""]
+    if(length(x)==0) x <- xo
+  }
+  paste(sort(unique(x)),collapse=",")
+})
+e2$Gene.ids <- sapply(strsplit(row.names(e2),"/",fixed=T), FUN=function(x){
+  if(!is.na(as.numeric(x[[1]]))) x <- x[-1]
+  x <- bm2[x,"ensembl_gene_id"]
+  x <- x[x!=""]
+  paste(sort(unique(x)),collapse=",")
+})
+e2$nbProteins <- sapply(strsplit(row.names(e2),"/",fixed=T), FUN=function(x){
+  if(!is.na(as.numeric(x[[1]]))) return(as.numeric(x[1]))
+  return(length(x))
+})
+
+for(i in 1:ncol(ag)) e2[which(is.na(e2[,i])),i] <- 0
+
+e2$Protein <- sapply(strsplit(row.names(e2),"/",fixed=T), FUN=function(x) paste(x[-1],collapse="/"))
+un <- paste0(e2$Protein,".",e2$Gene.names)
+w <- which(e2$nbProteins>2)
+un[w] <- paste0("*",e2$nbProteins[w],".",e2$Gene.names[w])
+w <- which(un %in% un[duplicated(un)])
+un[w] <- paste0("*",e2$nbProteins[w],letters,".",e2$Gene.names[w])
+row.names(e2) <- un
+
+d <- data.frame( label=colnames(e2)[1:(ncol(ag))],
+                 CN=c(1,3,1,1,2,2,3,2,1,3,2),
+                 condition=c("AtWBS","WBS","CTRL","DUP")[1+c(0,3,1,1,2,2,3,2,1,3,2)],
+                 replicate=c(1,1,1,2,1,2,2,3,3,3,4),
+                 stringsAsFactors = F
+               )
+
+e2$name <- row.names(e2)
+e2$ID <- e2$Protein
+d <- d[order(d$CN,row.names(d)),]
+e2 <- e2[,c(as.character(d$label),setdiff(colnames(e2),d$label))]
+se <- make_se(e2, 1:nrow(d), d)
+intensities <- e2[,1:nrow(d)]
+colnames(intensities) <- colnames(se)
+assays(se)[["intensity"]] <- intensities
+assayNames(se)[1] <- "lognorm"
+colnames(se) <- paste("iN",se$condition,gsub("_", "", d$label), sep=".")
+se$individual <- c("192","306","316","339","MIF","3391","8091","BU1","CF","242","809")
+se$condition[which(se$label=="S192B")] <- "AtWBS"
+se$genotype <- se$condition
+
+# we remove MIFF3, which was probably mixed with 316:
+se <- se[,which(!(colnames(se) %in% "iN.CTRL.SMIFF3"))]
+
+plot_frequency(se)
+se <- normalize_vsn(se)
+sen <- impute(se, fun = "MinProb")
+assays(se)[["imputed"]] <- assay(sen,"lognorm")
+metadata(se)$method <- "Median top 3 peptides, VSN normalization, minProb imputation."
+se <- svacor(se, ~genotype, useVST=FALSE, assayName="imputed")
+saveRDS(se, "../../clean/Neurons/Protein/Neurons.Protein.patientDerived.SE.rds")
+```
+
+
+```{r, include=FALSE}
+se <- readRDS("../../clean/Neurons/Protein/Neurons.Protein.patientDerived.SE.rds")
+sen <- se
+```
+
+# WBS genes
+
+```{r}
+sechm(sen, row.names(sen)[rowData(sen)$Gene.names %in% WBSg1], assayName="corrected", do.scale=TRUE)
+```
+
+
+# DEA
+
+```{r}
+sen2 <- sen[rowData(sen)$nbProteins <= 3,sen$genotype!="AtWBS"]
+sen2$genotype <- relevel(droplevels(as.factor(sen2$genotype)),"CTRL")
+mm <- model.matrix(~SV1+SV2+CN, data=as.data.frame(colData(sen2)))
+
+fit <- eBayes(lmFit(assays(sen2)$imputed, mm))
+
+res <- as.data.frame(topTable(fit, grep("CN",colnames(mm),value=TRUE), number=Inf))
+res <- homogenizeDEAresults(res)
+
+mm <- model.matrix(~SV1+SV2+genotype, data=as.data.frame(colData(sen2)))
+fit <- eBayes(lmFit(assays(sen2)$imputed, mm))
+resW <- homogenizeDEAresults(as.data.frame(topTable(fit, "genotypeWBS", number=Inf)))
+resD <- homogenizeDEAresults(as.data.frame(topTable(fit, "genotypeDUP", number=Inf)))
+sen2$genotype <- relevel(sen2$genotype, "WBS")
+mm <- model.matrix(~SV1+SV2+genotype, data=as.data.frame(colData(sen2)))
+fit <- eBayes(lmFit(assays(sen2)$imputed, mm))
+resDvW <- homogenizeDEAresults(as.data.frame(topTable(fit, "genotypeDUP", number=Inf)))
+ff <- c("logFC","PValue","FDR")
+prp <- function(x, label){
+  x <- homogenizeDEAresults(x)[,ff]
+  colnames(x) <- paste(colnames(x),label,sep=".")
+  x
+}
+m <- merge(res, prp(resW, "WBS"), by="row.names", all.x=TRUE)
+m <- merge(m, prp(resD, "DUP"), by.x="Row.names", by.y="row.names", all.x=TRUE)
+m <- merge(m, prp(resDvW, "DUPvsWBS"), by.x="Row.names", by.y="row.names", all.x=TRUE)
+row.names(m) <- m$Row.names
+m$Row.names <- NULL
+m <- m[order(m$PValue),]
+```
+
+# Regression on copy-number
+```{r}
+volcanoDEGs(m, main="Regression on copy-number", alpha = 0.05)
+saveRDS(m, file="../../clean/Neurons/Protein/Neurons.Protein.patientDerived.DEA.rds")
+```
+
+# Enrichments
+
+When there are multiple proteins for a gene, we keep the most significant one.
+
+## WBS vs CTRL
+```{r}
+EA <- list()
+cr <- cameraWrapper(toSymbol(subset_mDEA(m,"WBS")))
+EA[["WBS"]] <- list(camera=cr)
+printTable(cr)
+```
+
+## DUP vs CTRL
+```{r}
+cr <- cameraWrapper(toSymbol(subset_mDEA(m,"DUP")))
+EA[["DUP"]] <- list(camera=cr)
+printTable(cr)
+```
+
+## DUP vs CTRL
+```{r}
+cr <- cameraWrapper(toSymbol(subset_mDEA(m,"DUPvsWBS")))
+EA[["DUPvsWBS"]] <- list(camera=cr)
+printTable(cr)
+```
+
+## Regression
+```{r}
+cr <- cameraWrapper(toSymbol(m))
+EA[["reg"]] <- list(camera=cr)
+printTable(cr)
+
+saveRDS(EA, file="../../clean/Neurons/Protein/Neurons.Protein.patientDerived.DEA.enrichments.rds")
+```
+
+# Session info
+
+```{r}
+devtools::session_info()
+```
+
