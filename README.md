@@ -6,8 +6,8 @@ In addition, a web interface giving access to these results is available [here](
 The repository is structured aroung the following folders:
 
 * [clean/](clean/) contains, for each dataset, R .rds objects of the quantifications, DEA and enrichment results.
-* [indiv_processing/](indiv_processing/) contains the analyses ran to produce the objects in 'clean/'.
-* [figures/](figures/) contains the code used to generate the papers' (bioinfo) figures
-* [extData/](extData/) contains external data objects used in the analyses
+* [indiv_processing/](indiv_processing/) contains the analyses ran to produce the objects in 'clean/', including DEA analyses, as well as QCs and staging analyses.
+* [figures/](figures/) contains the code used to generate the papers' main (bioinfo) figures.
+* [extData/](extData/) contains external data objects (e.g. from other studies) used in the analyses.
 * [misc/](misc/) (as well as some R files in the root folder) contains R functions used in the analyses.
 
