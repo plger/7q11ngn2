@@ -220,3 +220,25 @@ pp
 ggsave("cdfs.pdf", pp, width=10, height=3)
 ```
 
+```{r}
+d2 <- d[d$layer=="TE" & d$condition=="DUP",]
+slfc <- split(d2$logFC, d2$Geneset)
+ks.test(slfc[[1]], slfc[[2]])
+```
+
+
+
+## mTOR post-transcriptionally convergent
+
+```{r}
+g <- intersect(a, unlist(gsets[grep("MTOR_SIGNALING", names(gsets), value=TRUE, ignore.case = TRUE)]))
+g <- c("EIF4B", "FDXR", "MCM2")
+sechm(sem, g, breaks=0.99, anno_columns=c("genotype","system"), gaps_at="Dataset", sortRowsOn=which(sem$Dataset!="TE"), do.scale=TRUE, sort.method="R2E", gaps_row="cluster2", use_raster=TRUE)
+d <- meltSE(sem, c("MCM2", "EIF4B"))
+d <- d[d$genotype!="AtWBS",]
+d$genotype <- relevel(d$genotype, "WBS")
+ggplot(d, aes(system, log2FC, fill=genotype)) + geom_boxplot() + 
+  scale_fill_manual(values=annoColors()$genotype) +
+  facet_grid(feature~Dataset, scales = "free_y")
+```
+

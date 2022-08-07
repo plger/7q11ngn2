@@ -25,6 +25,7 @@ Pierre-Luc Germain - `r format(Sys.time(), '%d %B, %Y')`
 suppressPackageStartupMessages({
   library(SummarizedExperiment)
   library(SEtools)
+  library(sechm)
   library(ggplot2)
   library(cowplot)
   library(ggrepel)
@@ -137,22 +138,22 @@ g <- setdiff(unique(getWordsFromString(cons.go$genes[grep("potassium",cons.go$te
 # gi subset of intersect(intersect(consistent,mdegs),getWordsFromString(cons.go[cons.go$term=="anterograde trans-synaptic signaling","genes"]))
 gi <- c("CACNA1G", "GRIK3","EIF4EBP2","SRC","IQSEC2","GABRQ","CELF4","STX3","BCHE","CHRM4")
 
-h <- SEtools::sechm(sem, g, anno_columns=c("treatment","genotype"), use_raster=TRUE,
+h <- SEtools::sechm(sem, g, top_annotation=c("treatment","genotype"), use_raster=TRUE,
               gaps_at=c("system"), breaks=0.98, row_names_gp = gpar(fontsize = 10.5),
               row_title="Rescued potassium ion transport DEGs\n(consistent between WBS and REST inhibitor)")
 
 
 
 rest <- intersect(names(regulon$REST[[1]]), consistent)
-h2 <- SEtools::sechm(sem, rest, anno_columns=c("treatment","genotype"), use_raster=TRUE,
+h2 <- SEtools::sechm(sem, rest, top_annotation=c("treatment","genotype"), use_raster=TRUE,
                gaps_at=c("system"), breaks=0.98, row_names_gp = gpar(fontsize = 10.5),
                row_title="REST targets consistent\nbetween WBS and REST inhibitor")
 
 h3 <- SEtools::sechm(sem, setdiff(grep("^RPL|^RPS|^EIF",consistent,value=TRUE),c("RPS6KA1","EIF4H")), 
-                     anno_columns=c("treatment","genotype"), use_raster=TRUE, gaps_at=c("system"),
+                     top_annotation=c("treatment","genotype"), use_raster=TRUE, gaps_at=c("system"),
                      breaks=0.99, row_names_gp = gpar(fontsize = 10.5),
                      row_title="Rescued\ntranslation-related DEGs")
-h3b <- SEtools::sechm(sem, gi, use_raster=TRUE, anno_columns=c(), name="hm2", show_heatmap_legend=FALSE,
+h3b <- SEtools::sechm(sem, gi, use_raster=TRUE, top_annotation=c(), name="hm2", show_heatmap_legend=FALSE,
                    gaps_at=c("system"), breaks=0.98, row_names_gp = gpar(fontsize = 10.5),
                    row_title="Other rescued\nsynaptic DEGs")    
 ```
@@ -180,17 +181,36 @@ ggsave("rest.pdf", p, height=8, width=12.5)
 g <- c("KCNH3","NOS1AP", "HCN3", "KCNQ3", "KCNK4", "KCNS2", "ATP1A1", "KCNK12", "KCNJ4")
 
 h1b <- SEtools::sechm(sem, g, 
-                     anno_columns=c("treatment","genotype"), use_raster=TRUE, gaps_at=c("system"),
+                     top_annotation=c("treatment","genotype"), use_raster=TRUE, gaps_at=c("system"),
                      breaks=0.99, row_names_gp = gpar(fontsize = 10),
                      row_title="ion\nchannels")
 h3 <- SEtools::sechm(sem, setdiff(grep("^RPL|^RPS|^EIF",consistent,value=TRUE),c("RPS6KA1","EIF4H")), 
-                     anno_columns=c(), use_raster=TRUE, gaps_at=c("system"),
+                     top_annotation=c(), use_raster=TRUE, gaps_at=c("system"),
                      breaks=0.99, row_names_gp = gpar(fontsize = 10),
                      row_title="translation")
-h3b <- SEtools::sechm(sem, gi, use_raster=TRUE, anno_columns=c(), name="hm2", show_heatmap_legend=FALSE,
+h3b <- SEtools::sechm(sem, gi, use_raster=TRUE, top_annotation=c(), name="hm2", show_heatmap_legend=FALSE,
                    gaps_at=c("system"), breaks=0.98, row_names_gp = gpar(fontsize = 10),
                    row_title="synaptic")    
 
 h1b %v% h3 %v% h3b
+```
+
+
+
+# REST-interacting genes
+
+```{r, fig.height=6, fig.width=5}
+ri <- readLines("../extData/RESTinteracting_Lee2016SuppTable3.genes")
+sechm(SEs$RNA, ri, use_raster=TRUE, top_annotation=c(), assayName="log2FC",
+                   gaps_at=c("Dataset"), breaks=0.98, row_names_gp = gpar(fontsize=8),
+                   row_title="Genes interacting with REST")
+```
+
+```{r}
+m <- readRDS("../../7q11-translation/extData/REST_5utr_motifs.rds")
+gm <- unique(m$gene_name[m$score>13])
+te <- toSymbol(readRDS("../clean/Neurons/TE/Neurons.TE.isogenic.SE.rds"))
+te <- SEtools::log2FC(te, "logTE", controls = te$WBSCN==2)
+SEtools::crossHm(list(RNA=SEs$RNA, TE=te, Protein=SEs$Protein), gm, use_raster=TRUE, assayName="log2FC",only.common = TRUE,top_annotation="genotype", breaks=0.98, row_names_gp = gpar(fontsize=8))
 ```
 

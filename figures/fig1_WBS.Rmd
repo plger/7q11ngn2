@@ -44,8 +44,8 @@ se$Dataset <- gsub("patientDerived","patient-\nderived",se$Dataset)
 se$Dataset <- factor(se$Dataset, c("patient-\nderived","isogenic"))
 WBScols = c(WBS="#ff2600", CTL="#c0c0c0", "7Dup"="#0433ff")
 pdf("fig1_wbs.pdf", width=3.5, height=4)
-draw(SEtools::sechm(se, WBSg1, assay="log2FC", sortRowsOn=NULL, cluster_rows=FALSE, gaps_at="Dataset",
-      anno_columns=c("genotype"), breaks=0.99, row_names_gp=gpar(fontsize=10), anno_colors=list(genotype=WBScols), use_raster=TRUE, row_title="WBSCR genes ordered by genomic position",
+draw(sechm(se, WBSg1, assay="log2FC", sortRowsOn=NULL, cluster_rows=FALSE, gaps_at="Dataset",
+      top_annotation=c("genotype"), breaks=0.99, row_names_gp=gpar(fontsize=10), anno_colors=list(genotype=WBScols), use_raster=TRUE, row_title="WBSCR genes ordered by genomic position",
       row_title_gp=gpar(fontsize=11)), merge_legends=TRUE)
 dev.off()
 ```

@@ -3,10 +3,14 @@ layercols = c(RNA="#FF9896", RPF="#98DF8A", TE="#BCBD22", Protein="#9467BD")
 systemcols <- c(isogenic="#4477AA", patients="#CC6677", patientDerived="#CC6677", "patient-derived"="#CC6677", "patient-\nderived"="#CC6677")
 
 # defaults for SEtools
-options("SEtools_def_anno_colors"=list( genotype=WBScols, layer=layercols,
-                                        system=systemcols,
-                                        SFARI=c("3"="lightblue", "2"="blue", "1"="darkblue")))
+annocolors <- list( genotype=WBScols, layer=layercols,
+            system=systemcols,
+            SFARI=c("3"="lightblue", "2"="blue", "1"="darkblue"))
+options("SEtools_def_anno_colors"=annocolors)
+setSechmOption("anno_colors", value=annocolors)
+
 options("SEtools_def_hmcols"=c("purple", "black", "orange"))
+setSechmOption("hmcols", value=c("purple", "black", "orange"))
 
 ggheatcol <- ggplot2::scale_color_gradient2(low="purple", mid="black", high="orange")
 

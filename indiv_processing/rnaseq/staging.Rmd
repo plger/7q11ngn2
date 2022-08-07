@@ -16,6 +16,7 @@ suppressPackageStartupMessages({
 })
 source("../../colors.R")
 source("../../misc.R")
+
 se <- readRDS("../../clean/Neurons/RNA/Neurons.RNA.isogenic.SE.rds")
 row.names(se) <- rowData(se)$stable_gid
 se <- se[rowSums(assay(se)>10)>1,]
@@ -53,6 +54,7 @@ h1 + h2
 
 ```{r, fig.width=8, fig.height=10}
 se2 <- readRDS("../../clean/Neurons/RNA/Neurons.RNA.patientDerived.SE.rds")
+se2 <- se2[,se2$genotype!="AtWBS"]
 row.names(se2) <- rowData(se2)$stable_gid
 se2 <- se2[rowSums(assay(se2)>10)>1 & apply(assays(se2)$logcpm,1,FUN=sd)>0,]
 i2 <- intersect(i, row.names(se2))
@@ -80,8 +82,8 @@ sem <- sem[order(-rowMeans(assay(sem))),]
 sem$Dataset <- factor(sem$Dataset, unique(sem$Dataset))
 levels(sem$genotype)[3:4] <- c("CTL","7Dup")
 h <- sechm(sem, grep("Unknown",row.names(sem),invert=TRUE,value=TRUE), assayName="cor", name="Pearson\ncorrelation",
-      gaps_at = "Dataset", sortRowsOn = NULL, cluster_rows = FALSE, anno_columns="genotype",
-      hmcols=viridisLite::viridis(100), anno_rows = "", row_names_gp = gpar(fontsize=10), use_raster=TRUE)
+      gaps_at = "Dataset", sortRowsOn = NULL, cluster_rows = FALSE, top_annotation="genotype",
+      hmcols=viridisLite::viridis(100), row_names_gp = gpar(fontsize=10), use_raster=TRUE)
 pdf("staging.pdf", width=5, height=6.5)
 draw(h, merge_legends=TRUE)
 dev.off()

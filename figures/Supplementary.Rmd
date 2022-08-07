@@ -32,6 +32,7 @@ suppressPackageStartupMessages({
   library(viper)
   library(limma)
   library(ComplexHeatmap)
+  library(sechm)
 })
 source("../misc.R")
 source("../colors.R")
@@ -42,6 +43,29 @@ theme_set(theme_cowplot(11))
 theme_replace(text=element_text(family="Arial", face="bold", colour="black"))
 ```
 
+# WBSCR proteomics
+
+```{r, fig.height=3, fig.width=5}
+se <- readRDS("../clean/Neurons/Protein/Neurons.Protein.merged.SE.rds")
+rpf <- readRDS("../clean/Neurons/RPF/Neurons.RPF.isogenic.SE.rds")
+rpf <-toSymbol(rpf)
+rpf <- log2FC(rpf, "logcpm", controls=rpf$WBSCN==2)
+h1 <- sechm(rpf, WBSg, assay="log2FC", sortRowsOn = NULL, cluster_rows = FALSE, breaks=0.99,
+      row_title="WBSCR genes (RPF)", column_title="isogenics", row_names_gp=gpar(fontsize=8),
+      show_annotation_legend=FALSE, show_heatmap_legend=FALSE, use_raster=TRUE)
+
+se <- se[,se$genotype!="AtWBS"]
+se$genotype <- droplevels(se$genotype)
+se$Dataset[se$Dataset=="patientDerived"] <- "patient-derived"
+h2 <- sechm(se, setdiff(WBSg,"LIMK1"), assayName = "log2FC", cluster_rows=FALSE, sortRowsOn=NULL,
+               breaks=0.985, gaps_at = "Dataset", top_annotation="genotype", use_raster=TRUE,
+            row_title="WBSCR genes (protein-level)", row_names_gp=gpar(fontsize=10))
+
+p <- plot_grid(grid.grabExpr(draw(h1, merge=TRUE)), grid.grabExpr(draw(h2, merge=TRUE)), nrow=1, rel_widths = c(2,4))
+pdf("WBSCR.prot.pdf", height=3, width=5)
+p
+dev.off()
+```
 
 
 # isogenic vs patient-derived iNeurons
@@ -123,6 +147,31 @@ dev.off()
 ```
 
 
+# REST
+
+```{r, fig.width=8, fig.height=4}
+se <- toSymbol(se)
+se <- log2FC(se, "tpm", se$genotype=="CTRL", by=se$Dataset, isLog=FALSE, toAssay="TPMlogFC")
+d <- SEtools::meltSE(se, "REST")
+d$genotype <- relevel(d$genotype, "WBS")
+d$Dataset <- gsub("\n","",d$Dataset)
+p1 <- ggplot(d, aes(genotype, log2FC, fill=genotype)) + 
+  geom_hline(yintercept=0, linetype="dashed", colour="gray") + geom_boxplot() + 
+  facet_wrap(~Dataset, scales = "free_y") + ylab("REST RNA log(FC)") +
+  scale_fill_manual(values=annoColors()$genotype[-2]) +
+  theme(legend.position="none")
+
+restInt <- readLines("../extData/RESTinteracting_Lee2016SuppTable3.genes")
+h1 <- sechm(se, restInt, assayName="log2FC", gaps_at="Dataset", anno_columns="genotype", 
+            breaks=0.99, row_title="REST interactors", 
+            column_title_gp=gpar(fontsize=12), use_raster=TRUE)
+
+pp <- plot_grid(p1, grid.grabExpr(draw(h1,merge=TRUE)), nrow=1, labels="AUTO",
+          scale=c(1,0.95), rel_widths = c(4,3))
+ggsave("rest_exp_int.pdf", pp, height=4, width=8)
+pp
+```
+
 
 
 # REST inhibition
@@ -172,3 +221,12 @@ plot_grid( gop,
   nrow=2, labels=c("A",""), rel_heights=c(4,5))
 ```
 
+
+
+```{r}
+prot <- toSymbol(readRDS("../clean/Neurons/Protein/Neurons.Protein.merged.SE.rds"))
+prot.dea <- toSymbol(readRDS("../clean/Neurons/Protein/Neurons.Protein.merged.DEA.rds"))
+g <- intersect(c("HDAC1","HDAC2","KDM1A","RCOR1","RCOR2",restInt),row.names(prot.dea)[prot.dea$PValue < 0.05])
+sechm(prot, g, assayName = "scaledLFC", top_annotation="genotype", gaps_at="Dataset")
+
+```
