@@ -1127,7 +1127,7 @@ getWordsFromString <- function (ss){
 
 breakStrings <- function (x, minSizeForBreak = 20, lb = "\n", allow3Lines=FALSE){
   sapply(x, minSizeForBreak = minSizeForBreak, lb = lb, FUN=function(x, minSizeForBreak, lb) {
-    if (nchar(x) <= minSizeForBreak)
+    if ((nchar(x) <= minSizeForBreak))
       return(x)
     g <- gregexpr(" ", x)[[1]]
     if (length(g) == 0)

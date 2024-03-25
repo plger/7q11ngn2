@@ -134,38 +134,52 @@ cons.go <- goseq.enrichment(consistent, "GO:BP", allGenes=m$Row.names)
 set.seed(1234)
 p2 <- clusterGO(cons.go)
 
-g <- setdiff(unique(getWordsFromString(cons.go$genes[grep("potassium",cons.go$term)])),"KCNAB1")
+g <- setdiff(unique(getWordsFromString(cons.go$genes[grep("potassium",cons.go$term)])),c("KCNAB1","KCNE4"))
 # gi subset of intersect(intersect(consistent,mdegs),getWordsFromString(cons.go[cons.go$term=="anterograde trans-synaptic signaling","genes"]))
 gi <- c("CACNA1G", "GRIK3","EIF4EBP2","SRC","IQSEC2","GABRQ","CELF4","STX3","BCHE","CHRM4")
 
-h <- SEtools::sechm(sem, g, top_annotation=c("treatment","genotype"), use_raster=TRUE,
-              gaps_at=c("system"), breaks=0.98, row_names_gp = gpar(fontsize = 10.5),
-              row_title="Rescued potassium ion transport DEGs\n(consistent between WBS and REST inhibitor)")
+# make logFC relative to WBS
+sem$treatment2 <- sem$treatment
+sem$treatment2[is.na(sem$treatment)] <- "DMSO"
+levels(sem$genotype)[1] <- "CTL"
+levels(sem$system)[1] <- "patient-\nderived"
+sem <- log2FC(sem, fromAssay = "log2FC", isLog=TRUE, by=sem$system,
+              controls = sem$genotype=="WBS" & sem$treatment2!="RestInhibitor")
+
+tr <- setdiff(grep("^RPL|^RPS|^EIF",consistent,value=TRUE),c("RPS6KA1","EIF4H"))
+gl <- list("potassium transport"=g, translation=tr)
+h <- sechm(sem, gl, top_annotation=c("treatment","genotype"), use_raster=TRUE,
+      gaps_at=c("system"), breaks=0.98, row_names_gp = gpar(fontsize = 10),
+      #row_title="Rescued potassium ion transport DEGs\n(consistent between WBS and REST inhibitor)",
+      name="scaled\nlog2(FC)\nrelative\nto WBS", assayName = "scaledLFC")
 
 
 
-rest <- intersect(names(regulon$REST[[1]]), consistent)
-h2 <- SEtools::sechm(sem, rest, top_annotation=c("treatment","genotype"), use_raster=TRUE,
-               gaps_at=c("system"), breaks=0.98, row_names_gp = gpar(fontsize = 10.5),
-               row_title="REST targets consistent\nbetween WBS and REST inhibitor")
+# 
+# rest <- intersect(names(regulon$REST[[1]]), consistent)
+# h2 <- sechm(sem, rest, top_annotation=c("treatment","genotype"), use_raster=TRUE,
+#              gaps_at=c("system"), breaks=0.98, row_names_gp = gpar(fontsize = 10.5),
+#              row_title="REST targets consistent\nbetween WBS and REST inhibitor")
 
-h3 <- SEtools::sechm(sem, setdiff(grep("^RPL|^RPS|^EIF",consistent,value=TRUE),c("RPS6KA1","EIF4H")), 
-                     top_annotation=c("treatment","genotype"), use_raster=TRUE, gaps_at=c("system"),
-                     breaks=0.99, row_names_gp = gpar(fontsize = 10.5),
-                     row_title="Rescued\ntranslation-related DEGs")
-h3b <- SEtools::sechm(sem, gi, use_raster=TRUE, top_annotation=c(), name="hm2", show_heatmap_legend=FALSE,
-                   gaps_at=c("system"), breaks=0.98, row_names_gp = gpar(fontsize = 10.5),
-                   row_title="Other rescued\nsynaptic DEGs")    
+h3 <- sechm(sem, setdiff(grep("^RPL|^RPS|^EIF",consistent,value=TRUE),c("RPS6KA1","EIF4H")), 
+             top_annotation=c("treatment","genotype"), use_raster=TRUE, gaps_at=c("system"),
+             breaks=0.99, row_names_gp = gpar(fontsize = 10.5),
+             row_title="Rescued\ntranslation-related DEGs",
+             name="scaled\nlog2(FC)\nrelative\nto WBS", assayName = "scaledLFC")
+# h3b <- sechm(sem, gi, use_raster=TRUE, top_annotation=NA, name="hm2", show_heatmap_legend=FALSE,
+#              gaps_at=c("system"), breaks=0.98, row_names_gp = gpar(fontsize = 10.5),
+#              row_title="Other rescued\nsynaptic DEGs", assayName = "scaledLFC")
 ```
 
 
-```{r, fig.height=8, fig.width=12.5}
-p <- plot_grid(p1, p2, grid.grabExpr(draw(h, merge_legend=TRUE)), 
-          grid.grabExpr(draw(h3 %v% h3b, merge_legend=TRUE)),
-          rel_heights=c(4,5), scale=0.95, labels="AUTO")
+```{r, fig.height=6.8, fig.width=12.5}
+p <- plot_grid(
+  plot_grid(p1, p2, nrow=2, scale=0.95, labels="AUTO"),
+  grid.grabExpr(draw(h, merge_legend=TRUE), wrap.grobs = TRUE),
+  nrow=1, scale=c(1,0.95), rel_widths=c(3,2), labels=c("","C"))
 
-ggsave("rest.pdf", p, height=8, width=12.5)
-
+ggsave("rest.pdf", p, height=6.8, width=12.5)
+p
 # 
 # pdf("rest_targets.pdf", height=4, width=5.5)
 # draw(h2, merge_legend=TRUE)
@@ -178,21 +192,16 @@ ggsave("rest.pdf", p, height=8, width=12.5)
 # Only most relevant genes
 
 ```{r}
+levels(sem$genotype)[1] <- "CTL"
+levels(sem$system)[1] <- "patient-\nderived"
 g <- c("KCNH3","NOS1AP", "HCN3", "KCNQ3", "KCNK4", "KCNS2", "ATP1A1", "KCNK12", "KCNJ4")
+g <- list("ion\nchannels"=g,
+          "translation"=setdiff(grep("^RPL|^RPS|^EIF",consistent,value=TRUE),c("RPS6KA1","EIF4H")),
+          synaptic=gi)
 
-h1b <- SEtools::sechm(sem, g, 
-                     top_annotation=c("treatment","genotype"), use_raster=TRUE, gaps_at=c("system"),
-                     breaks=0.99, row_names_gp = gpar(fontsize = 10),
-                     row_title="ion\nchannels")
-h3 <- SEtools::sechm(sem, setdiff(grep("^RPL|^RPS|^EIF",consistent,value=TRUE),c("RPS6KA1","EIF4H")), 
-                     top_annotation=c(), use_raster=TRUE, gaps_at=c("system"),
-                     breaks=0.99, row_names_gp = gpar(fontsize = 10),
-                     row_title="translation")
-h3b <- SEtools::sechm(sem, gi, use_raster=TRUE, top_annotation=c(), name="hm2", show_heatmap_legend=FALSE,
-                   gaps_at=c("system"), breaks=0.98, row_names_gp = gpar(fontsize = 10),
-                   row_title="synaptic")    
-
-h1b %v% h3 %v% h3b
+h3 <- sechm(sem, g, top_annotation=c("treatment","genotype"), use_raster=TRUE, 
+            gaps_at=c("system"), breaks=0.99, row_names_gp = gpar(fontsize = 10),
+            assayName = "scaledLFC", name="scaled\nlog2(FC)\nrelative\nto WBS")
 ```
 
 
@@ -201,10 +210,21 @@ h1b %v% h3 %v% h3b
 
 ```{r, fig.height=6, fig.width=5}
 ri <- readLines("../extData/RESTinteracting_Lee2016SuppTable3.genes")
-sechm(SEs$RNA, ri, use_raster=TRUE, top_annotation=c(), assayName="log2FC",
-                   gaps_at=c("Dataset"), breaks=0.98, row_names_gp = gpar(fontsize=8),
-                   row_title="Genes interacting with REST")
+SEs$RNA$Dataset <- gsub("patientDerived","patient-\nderived",SEs$RNA$Dataset)
+hi <- sechm(SEs$RNA, ri, use_raster=TRUE, top_annotation=c("genotype"), assayName="log2FC",
+           gaps_at=c("Dataset"), breaks=0.98, row_names_gp = gpar(fontsize=8),
+           row_title="Genes interacting with REST")
 ```
+
+```{r, fig.width=9, fig.height=6}
+pdf("RESTi2.pdf", width=9, height=6)
+plot_grid(grid.grabExpr(draw(hi, merge=TRUE),wrap.grobs=TRUE),
+          grid.grabExpr(draw(h3, merge=TRUE),wrap.grobs=TRUE),
+          nrow=1, rel_widths=c(3,5), labels="AUTO", scale=0.95)
+dev.off()
+```
+
+
 
 ```{r}
 m <- readRDS("../../7q11-translation/extData/REST_5utr_motifs.rds")
